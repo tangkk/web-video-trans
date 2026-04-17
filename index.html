@@ -41,7 +41,6 @@
               <button id="clearLoopBtn" class="loop-btn loop-btn-clear" type="button">×</button>
             </div>
             <div class="wave-toolbar-right">
-              <button id="stopBtn" class="loop-btn" type="button">Stop</button>
               <label class="zoom-control" for="zoomSlider">
                 <span>Zoom</span>
                 <input id="zoomSlider" type="range" min="1" max="24" step="1" value="1" />
@@ -55,7 +54,16 @@
           </div>
 
           <div class="timeline-row">
-            <button id="playPauseBtn" class="loop-btn play-toggle-btn" type="button">Play</button>
+            <div class="transport-controls">
+              <button id="stopBtn" class="transport-btn svg-transport-btn" type="button" aria-label="Rewind to start" title="Rewind to start">
+                <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M10.5 3.5L4.5 8L10.5 12.5V3.5Z" fill="currentColor"></path>
+                </svg>
+              </button>
+              <button id="playPauseBtn" class="transport-btn svg-transport-btn" type="button" aria-label="Play" title="Play">
+                <svg id="playPauseIcon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"></svg>
+              </button>
+            </div>
             <span id="currentTimeText">00:00</span>
             <input id="seekBar" type="range" min="0" max="1000" value="0" step="1" />
             <span id="remainingTimeText">-00:00</span>

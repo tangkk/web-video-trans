@@ -12,6 +12,7 @@ const waveCanvas = document.getElementById('waveCanvas');
 const zoomSlider = document.getElementById('zoomSlider');
 const seekBar = document.getElementById('seekBar');
 const playPauseBtn = document.getElementById('playPauseBtn');
+const playPauseIcon = document.getElementById('playPauseIcon');
 const currentTimeTextEl = document.getElementById('currentTimeText');
 const remainingTimeTextEl = document.getElementById('remainingTimeText');
 const clearBtn = document.getElementById('clearBtn');
@@ -73,7 +74,12 @@ function setStatus(text) {
 }
 
 function updatePlayPauseButton() {
-  playPauseBtn.textContent = video.paused || video.ended ? 'Play' : 'Pause';
+  const paused = video.paused || video.ended;
+  playPauseIcon.innerHTML = paused
+    ? '<path d="M4.5 3.5L11.5 8L4.5 12.5V3.5Z" fill="currentColor"></path>'
+    : '<rect x="4.5" y="3.5" width="2.5" height="9" fill="currentColor"></rect><rect x="9" y="3.5" width="2.5" height="9" fill="currentColor"></rect>';
+  playPauseBtn.setAttribute('aria-label', paused ? 'Play' : 'Pause');
+  playPauseBtn.setAttribute('title', paused ? 'Play' : 'Pause');
 }
 
 function syncMediaMode(file) {
