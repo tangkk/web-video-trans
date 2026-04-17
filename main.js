@@ -32,6 +32,7 @@ const ctx = waveCanvas.getContext('2d');
 let objectUrl = null;
 let audioContext = null;
 let waveformPeaks = [];
+let sourcePeaks = [];
 let currentFile = null;
 let currentJobId = 0;
 let lastDrawnProgress = -1;
@@ -187,6 +188,7 @@ function resizeCanvasForDisplay() {
 
 function resetCanvas() {
   waveformPeaks = [];
+  sourcePeaks = [];
   lastDrawnProgress = -1;
   drawWaveform();
 }
@@ -224,6 +226,24 @@ function drawMarker(x, label, width, height) {
   ctx.fillText(label, clampedX, top + 1);
 }
 
+function getDisplayPeaks(targetCount) {
+  const base = sourcePeaks.length ? sourcePeaks : generatePlaceholderPeaks(1200);
+  const count = Math.max(64, targetCount);
+  if (base.length === count) return base;
+
+  const sampled = [];
+  for (let i = 0; i < count; i += 1) {
+    const start = Math.floor((i / count) * base.length);
+    const end = Math.max(start + 1, Math.floor(((i + 1) / count) * base.length));
+    let max = 0;
+    for (let j = start; j < end && j < base.length; j += 1) {
+      if (base[j] > max) max = base[j];
+    }
+    sampled.push(max);
+  }
+  return sampled;
+}
+
 function drawWaveform(progress = video.duration ? video.currentTime / video.duration : 0) {
   progress = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
   resizeCanvasForDisplay();
@@ -231,7 +251,9 @@ function drawWaveform(progress = video.duration ? video.currentTime / video.dura
   const width = waveCanvas.width;
   const height = waveCanvas.height;
   const mid = height / 2;
-  const peaks = waveformPeaks.length ? waveformPeaks : generatePlaceholderPeaks();
+  const targetPeakCount = Math.max(180, Math.floor(width / 3));
+  const peaks = getDisplayPeaks(targetPeakCount);
+  waveformPeaks = peaks;
   const barWidth = Math.max(2, Math.floor(width / peaks.length) - 1);
   const gap = 1;
 
@@ -373,10 +395,9 @@ async function ensureFFmpegLoaded() {
       hint: 'The first run is usually the slowest.',
     });
 
-    const base = import.meta.env.BASE_URL || '/';
-    const coreURL = `${base}ffmpeg-core/ffmpeg-core.js`;
+    const coreURL = new URL('./src/vendor/ffmpeg-core/ffmpeg-core.js', import.meta.url).href;
     updateProcessing({ percent: 12, detail: 'FFmpeg JS core loaded. Preparing WASM…' });
-    const wasmURL = `${base}ffmpeg-core/ffmpeg-core.wasm`;
+    const wasmURL = new URL('./src/vendor/ffmpeg-core/ffmpeg-core.wasm', import.meta.url).href;
     updateProcessing({ percent: 20, detail: 'FFmpeg WASM located locally. Initializing…' });
     await ffmpeg.load({ coreURL, wasmURL });
     updateProcessing({ percent: 25, detail: 'FFmpeg is ready.' });
@@ -445,7 +466,7 @@ async function extractAudioWithFFmpeg(file, jobId) {
 }
 
 function computePeaksFromChannelData(channelData) {
-  const peakCount = Math.min(6000, Math.max(600, Math.floor(getTimelineWidth() * 1.2)));
+  const peakCount = 4000;
   const blockSize = Math.floor(channelData.length / peakCount) || 1;
   const peaks = [];
 
@@ -500,8 +521,8 @@ async function buildWaveformFromFile(file, jobId) {
     hint: 'Almost done.',
   });
 
-  const peaks = computePeaksFromChannelData(audioBuffer.getChannelData(0));
-  waveformPeaks = peaks;
+  sourcePeaks = computePeaksFromChannelData(audioBuffer.getChannelData(0));
+  waveformPeaks = [];
   drawWaveform();
   setStatus('Real waveform generated');
   finishProcessing(true, 'Real waveform is ready');
@@ -535,7 +556,8 @@ async function loadFile(file) {
   } catch (error) {
     console.error(error);
     if (jobId !== currentJobId) return;
-    waveformPeaks = generatePlaceholderPeaks();
+    sourcePeaks = generatePlaceholderPeaks(1200);
+    waveformPeaks = [];
     drawWaveform();
     setStatus(`Real audio extraction failed. Fallback waveform shown: ${error.message || 'unknown error'}`);
     finishProcessing(false, error.message || 'Real audio extraction failed');
@@ -708,7 +730,6 @@ setBBtn.addEventListener('click', setLoopPointB);
 zoomSlider.addEventListener('input', () => {
   zoomLevel = Number(zoomSlider.value);
   lastDrawnProgress = -1;
-  waveformPeaks = waveformPeaks.length ? waveformPeaks : generatePlaceholderPeaks();
   drawWaveform(video.duration ? video.currentTime / video.duration : 0);
 });
 
