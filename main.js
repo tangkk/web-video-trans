@@ -1,5 +1,5 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { fetchFile } from '@ffmpeg/util';
 
 const video = document.getElementById('video');
 const viewerCard = document.querySelector('.viewer-card');
@@ -373,11 +373,11 @@ async function ensureFFmpegLoaded() {
       hint: 'The first run is usually the slowest.',
     });
 
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
-    const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
-    updateProcessing({ percent: 12, detail: 'FFmpeg JS core loaded. Fetching WASM…' });
-    const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
-    updateProcessing({ percent: 20, detail: 'FFmpeg WASM fetched. Initializing…' });
+    const base = import.meta.env.BASE_URL || '/';
+    const coreURL = `${base}ffmpeg-core/ffmpeg-core.js`;
+    updateProcessing({ percent: 12, detail: 'FFmpeg JS core loaded. Preparing WASM…' });
+    const wasmURL = `${base}ffmpeg-core/ffmpeg-core.wasm`;
+    updateProcessing({ percent: 20, detail: 'FFmpeg WASM located locally. Initializing…' });
     await ffmpeg.load({ coreURL, wasmURL });
     updateProcessing({ percent: 25, detail: 'FFmpeg is ready.' });
     return ffmpeg;
