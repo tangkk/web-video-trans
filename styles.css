@@ -78,12 +78,89 @@ body {
 .file-picker-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.file-picker-left {
+  display: flex;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
 #videoFile {
   display: none;
+}
+
+.shortcut-help {
+  position: relative;
+}
+
+.shortcut-help summary {
+  list-style: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.shortcut-help summary::-webkit-details-marker {
+  display: none;
+}
+
+.shortcut-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  min-width: 220px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.shortcut-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shortcut-list > div {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.shortcut-list kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
 }
 
 .file-btn,
@@ -239,7 +316,8 @@ video.ready {
   padding-inline: 0;
 }
 
-.zoom-control {
+.zoom-control,
+.speed-control {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -248,7 +326,12 @@ video.ready {
   user-select: none;
 }
 
-#zoomSlider {
+.speed-control {
+  min-width: 140px;
+}
+
+#zoomSlider,
+#speedSlider {
   width: 128px;
   accent-color: #222222;
 }
@@ -402,6 +485,15 @@ video.ready {
   .wave-strip-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .file-picker-row {
+    align-items: flex-start;
+  }
+
+  .shortcut-popover {
+    right: auto;
+    left: 0;
   }
 
   .wave-toolbar-right {

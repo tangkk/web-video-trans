@@ -10,6 +10,8 @@ const statusTextEl = document.getElementById('statusText');
 const waveViewport = document.getElementById('waveViewport');
 const waveCanvas = document.getElementById('waveCanvas');
 const zoomSlider = document.getElementById('zoomSlider');
+const speedSlider = document.getElementById('speedSlider');
+const speedLabel = document.getElementById('speedLabel');
 const seekBar = document.getElementById('seekBar');
 const playPauseBtn = document.getElementById('playPauseBtn');
 const playPauseIcon = document.getElementById('playPauseIcon');
@@ -43,6 +45,7 @@ let lastKnownDuration = 0;
 let rafId = null;
 let lastTimelineTextSecond = -1;
 let zoomLevel = 1;
+let playbackRate = 1;
 let loopState = {
   enabledA: false,
   enabledB: false,
@@ -71,6 +74,18 @@ function formatTime(seconds) {
 
 function setStatus(text) {
   statusTextEl.textContent = text;
+}
+
+function updatePlaybackRate(rate) {
+  const clamped = Math.max(0.1, Math.min(2.0, Math.round(rate * 10) / 10));
+  playbackRate = clamped;
+  video.playbackRate = clamped;
+  speedSlider.value = String(Math.round(clamped * 10));
+  speedLabel.textContent = `${clamped.toFixed(1)}×`;
+}
+
+function stepPlaybackRate(delta) {
+  updatePlaybackRate(playbackRate + delta);
 }
 
 function updatePlayPauseButton() {
@@ -739,6 +754,10 @@ zoomSlider.addEventListener('input', () => {
   drawWaveform(video.duration ? video.currentTime / video.duration : 0);
 });
 
+speedSlider.addEventListener('input', () => {
+  updatePlaybackRate(Number(speedSlider.value) / 10);
+});
+
 regenBtn.addEventListener('click', async () => {
   if (!currentFile || processingState.active) return;
   const jobId = ++currentJobId;
@@ -826,6 +845,27 @@ window.addEventListener('keydown', (event) => {
     clearLoop();
     drawWaveform(video.duration ? video.currentTime / video.duration : 0);
     setStatus(describeLoopState());
+    return;
+  }
+
+  if (event.key === '-' || event.key === '_') {
+    event.preventDefault();
+    stepPlaybackRate(-0.1);
+    setStatus(`Speed ${playbackRate.toFixed(1)}×`);
+    return;
+  }
+
+  if (event.key === '=' || event.key === '+') {
+    event.preventDefault();
+    stepPlaybackRate(0.1);
+    setStatus(`Speed ${playbackRate.toFixed(1)}×`);
+    return;
+  }
+
+  if (event.key === '0') {
+    event.preventDefault();
+    updatePlaybackRate(1.0);
+    setStatus('Speed 1.0×');
   }
 });
 
@@ -858,5 +898,6 @@ window.addEventListener('beforeunload', stopPlaybackAnimation);
 
 updateProcessingUi();
 updateLoopButtons();
+updatePlaybackRate(1);
 updatePlayPauseButton();
 drawWaveform();

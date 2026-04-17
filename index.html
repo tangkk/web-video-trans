@@ -18,9 +18,26 @@
 
       <section class="card controls-card">
         <div class="file-picker-row">
-          <label class="file-btn" for="videoFile">Open file</label>
-          <input id="videoFile" type="file" accept="video/*,audio/*" />
-          <button id="clearBtn" class="ghost-btn" type="button">Clear</button>
+          <div class="file-picker-left">
+            <label class="file-btn" for="videoFile">Open file</label>
+            <input id="videoFile" type="file" accept="video/*,audio/*" />
+            <button id="clearBtn" class="ghost-btn" type="button">Clear</button>
+          </div>
+          <details class="shortcut-help">
+            <summary aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</summary>
+            <div class="shortcut-popover">
+              <div class="shortcut-title">Keyboard shortcuts</div>
+              <div class="shortcut-list">
+                <div><kbd>Space</kbd><span>Play / pause</span></div>
+                <div><kbd>[</kbd><span>Set A</span></div>
+                <div><kbd>]</kbd><span>Set B</span></div>
+                <div><kbd>Esc</kbd><span>Clear A-B loop</span></div>
+                <div><kbd>-</kbd><span>Slower by 0.1×</span></div>
+                <div><kbd>+</kbd><span>Faster by 0.1×</span></div>
+                <div><kbd>0</kbd><span>Reset speed to 1.0×</span></div>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -41,6 +58,17 @@
               <button id="clearLoopBtn" class="loop-btn loop-btn-clear" type="button">×</button>
             </div>
             <div class="wave-toolbar-right">
+              <label class="speed-control" for="speedSlider">
+                <span id="speedLabel">1.0×</span>
+                <input id="speedSlider" type="range" min="1" max="20" step="1" value="10" list="speedMarks" />
+                <datalist id="speedMarks">
+                  <option value="1"></option>
+                  <option value="5"></option>
+                  <option value="10"></option>
+                  <option value="15"></option>
+                  <option value="20"></option>
+                </datalist>
+              </label>
               <label class="zoom-control" for="zoomSlider">
                 <span>Zoom</span>
                 <input id="zoomSlider" type="range" min="1" max="24" step="1" value="1" />
