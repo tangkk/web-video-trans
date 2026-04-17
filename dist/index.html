@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video Waveform Viewer</title>
+    <script type="module" crossorigin src="/assets/index-CR4YuZQA.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-B_Ppryei.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="home-hero">
+        <div class="home-hero-copy">
+          <p class="home-eyebrow">local video · local audio extraction · no upload</p>
+          <h1 class="site-title home-title">Video Waveform Viewer</h1>
+          <p class="hero-subtitle">Open a local file, preview the video, and inspect its waveform directly in the browser.</p>
+        </div>
+      </header>
+
+      <section class="card controls-card">
+        <div class="file-picker-row">
+          <label class="file-btn" for="videoFile">Open file</label>
+          <input id="videoFile" type="file" accept="video/*,audio/*" />
+          <button id="clearBtn" class="ghost-btn" type="button">Clear</button>
+        </div>
+      </section>
+
+      <section class="card viewer-card">
+        <div id="dropZone" class="media-stage">
+          <video id="video" controls playsinline></video>
+          <div id="emptyState" class="empty-state">
+            <div class="empty-title">Drop a video here, or open one from your device.</div>
+            <div class="empty-subtitle">Everything runs locally in your browser.</div>
+          </div>
+        </div>
+
+        <div class="wave-strip-shell">
+          <div class="wave-strip-toolbar">
+            <div class="ab-loop-controls">
+              <button id="setABtn" class="loop-btn" type="button">A</button>
+              <button id="setBBtn" class="loop-btn" type="button">B</button>
+              <button id="clearLoopBtn" class="loop-btn loop-btn-clear" type="button">×</button>
+            </div>
+            <div class="wave-toolbar-right">
+              <button id="stopBtn" class="loop-btn" type="button">Stop</button>
+              <label class="zoom-control" for="zoomSlider">
+                <span>Zoom</span>
+                <input id="zoomSlider" type="range" min="1" max="24" step="1" value="1" />
+              </label>
+              <button id="regenBtn" class="icon-btn" type="button" aria-label="Regenerate waveform" title="Regenerate waveform">↻</button>
+            </div>
+          </div>
+
+          <div id="waveViewport" class="wave-viewport">
+            <canvas id="waveCanvas" width="1200" height="180" aria-label="Audio waveform"></canvas>
+          </div>
+
+          <div class="timeline-row">
+            <button id="playPauseBtn" class="loop-btn play-toggle-btn" type="button">Play</button>
+            <span id="currentTimeText">00:00</span>
+            <input id="seekBar" type="range" min="0" max="1000" value="0" step="1" />
+            <span id="remainingTimeText">-00:00</span>
+          </div>
+        </div>
+
+        <div id="processingPanel" class="processing-panel" hidden>
+          <div class="processing-topline">
+            <div>
+              <div id="processingStage" class="processing-stage">Preparing</div>
+              <div id="processingDetail" class="processing-detail">Waiting to start</div>
+            </div>
+            <div id="processingPercent" class="processing-percent">0%</div>
+          </div>
+          <div class="progress-bar" aria-hidden="true">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div class="processing-footnote">
+            <span id="processingHint">The first run may take longer because FFmpeg core needs to load.</span>
+          </div>
+        </div>
+
+        <div id="statusText" class="status-line">Idle</div>
+      </section>
+    </div>
+
+  </body>
+</html>
