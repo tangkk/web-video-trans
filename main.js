@@ -6,10 +6,12 @@ const viewerCard = document.querySelector('.viewer-card');
 const videoFileInput = document.getElementById('videoFile');
 const dropZone = document.getElementById('dropZone');
 const emptyState = document.getElementById('emptyState');
+const mobileClearBtn = document.getElementById('mobileClearBtn');
 const statusTextEl = document.getElementById('statusText');
 const waveViewport = document.getElementById('waveViewport');
 const waveCanvas = document.getElementById('waveCanvas');
 const zoomSlider = document.getElementById('zoomSlider');
+const zoomLabel = document.getElementById('zoomLabel');
 const speedSlider = document.getElementById('speedSlider');
 const speedLabel = document.getElementById('speedLabel');
 const seekBar = document.getElementById('seekBar');
@@ -17,9 +19,11 @@ const playPauseBtn = document.getElementById('playPauseBtn');
 const playPauseIcon = document.getElementById('playPauseIcon');
 const currentTimeTextEl = document.getElementById('currentTimeText');
 const remainingTimeTextEl = document.getElementById('remainingTimeText');
+const openFileBtn = document.getElementById('openFileBtn');
 const clearBtn = document.getElementById('clearBtn');
+const shortcutBtn = document.getElementById('shortcutBtn');
+const shortcutPopover = document.getElementById('shortcutPopover');
 const stopBtn = document.getElementById('stopBtn');
-const regenBtn = document.getElementById('regenBtn');
 const setABtn = document.getElementById('setABtn');
 const setBBtn = document.getElementById('setBBtn');
 const clearLoopBtn = document.getElementById('clearLoopBtn');
@@ -46,6 +50,11 @@ let rafId = null;
 let lastTimelineTextSecond = -1;
 let zoomLevel = 1;
 let playbackRate = 1;
+let isPointerSeekingWaveform = false;
+let lastPlayheadX = 0;
+let lastPlayheadCssX = 0;
+let pipelineDebugLines = [];
+let pipelineDebugStartedAt = 0;
 let loopState = {
   enabledA: false,
   enabledB: false,
@@ -84,6 +93,25 @@ function updatePlaybackRate(rate) {
   speedLabel.textContent = `${clamped.toFixed(1)}×`;
 }
 
+function updateZoomLabel() {
+  zoomLabel.textContent = `${zoomLevel}×`;
+}
+
+function resetPipelineDebug() {
+  pipelineDebugLines = [];
+  pipelineDebugStartedAt = performance.now();
+  updateDebugPanel();
+}
+
+function pushPipelineDebug(label, extra = '') {
+  const elapsed = pipelineDebugStartedAt ? ((performance.now() - pipelineDebugStartedAt) / 1000).toFixed(2) : '0.00';
+  pipelineDebugLines.push(`${elapsed}s  ${label}${extra ? `  ${extra}` : ''}`);
+  pipelineDebugLines = pipelineDebugLines.slice(-20);
+  updateDebugPanel();
+}
+
+function updateDebugPanel() {}
+
 function stepPlaybackRate(delta) {
   updatePlaybackRate(playbackRate + delta);
 }
@@ -114,9 +142,11 @@ function updateLoopButtons() {
 
 function setBusyUi(busy) {
   videoFileInput.disabled = busy;
+  openFileBtn.disabled = busy;
   clearBtn.disabled = busy;
+  mobileClearBtn.disabled = busy || !currentFile;
   stopBtn.disabled = busy || !currentFile;
-  regenBtn.disabled = busy || !currentFile;
+  shortcutBtn.disabled = busy;
   setABtn.disabled = busy || !currentFile;
   setBBtn.disabled = busy || !currentFile;
   clearLoopBtn.disabled = busy || (!loopState.enabledA && !loopState.enabledB);
@@ -160,6 +190,7 @@ function finishProcessing(success = true, detail = success ? 'Done' : 'Failed') 
     hint: success ? 'You can now click or drag across the waveform to seek.' : 'Try another file and run again.',
   };
   updateProcessingUi();
+  updateDebugPanel();
 }
 
 function clearLoop() {
@@ -181,6 +212,13 @@ function describeLoopState() {
     return `B set at ${formatTime(loopState.end)}`;
   }
   return 'A-B loop cleared';
+}
+
+function isMobileViewport() {
+  return window.matchMedia('(max-width: 720px)').matches;
+}
+
+function updateViewportCursorVisibility() {
 }
 
 function getBaseTimelineWidth() {
@@ -327,25 +365,41 @@ function drawWaveform(progress = video.duration ? video.currentTime / video.dura
   }
 
   const playheadX = Math.max(0, Math.min(width, progress * width));
+  lastPlayheadX = playheadX;
+  lastPlayheadCssX = Math.max(0, Math.min(parseFloat(waveCanvas.style.width || '0') || 0, progress * (parseFloat(waveCanvas.style.width || '0') || 0)));
   ctx.fillStyle = 'rgba(0,0,0,0.92)';
   ctx.fillRect(playheadX, 0, Math.max(2, width * 0.0018), height);
 
-  keepPlayheadInView(playheadX);
+  keepPlayheadInView(lastPlayheadCssX);
+  updateDebugPanel();
+}
+
+function scrollWaveViewportToPlayhead(playheadCssX, marginRatio = 0.18) {
+  const viewportWidth = waveViewport.clientWidth;
+  if (!viewportWidth) return;
+
+  const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || viewportWidth;
+  const margin = Math.max(48, viewportWidth * marginRatio);
+  const left = waveViewport.scrollLeft;
+  const right = left + viewportWidth;
+  const maxScroll = Math.max(0, canvasCssWidth - viewportWidth);
+
+  let targetLeft = left;
+  if (playheadCssX < left + margin) {
+    targetLeft = playheadCssX - margin;
+  } else if (playheadCssX > right - margin) {
+    targetLeft = playheadCssX - viewportWidth + margin;
+  }
+
+  waveViewport.scrollLeft = Math.max(0, Math.min(maxScroll, targetLeft));
 }
 
 function keepPlayheadInView(playheadX) {
   const viewportWidth = waveViewport.clientWidth;
   if (!viewportWidth) return;
+  if (isPointerSeekingWaveform) return;
 
-  const left = waveViewport.scrollLeft;
-  const right = left + viewportWidth;
-  const margin = Math.max(48, viewportWidth * 0.18);
-
-  if (playheadX < left + margin) {
-    waveViewport.scrollLeft = Math.max(0, playheadX - margin);
-  } else if (playheadX > right - margin) {
-    waveViewport.scrollLeft = Math.max(0, playheadX - viewportWidth + margin);
-  }
+  scrollWaveViewportToPlayhead(playheadX, 0.18);
 }
 
 function roundRect(context, x, y, width, height, radius) {
@@ -363,12 +417,12 @@ function roundRect(context, x, y, width, height, radius) {
 }
 
 async function ensureAudioContext() {
+  pushPipelineDebug('ensureAudioContext:start', `hasContext=${Boolean(audioContext)}`);
   if (!audioContext) {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    pushPipelineDebug('ensureAudioContext:created', `state=${audioContext.state}`);
   }
-  if (audioContext.state === 'suspended') {
-    await audioContext.resume();
-  }
+  pushPipelineDebug('ensureAudioContext:done', `state=${audioContext.state}`);
   return audioContext;
 }
 
@@ -399,8 +453,15 @@ function maybeUpdateProgressFromLog(message) {
 }
 
 async function ensureFFmpegLoaded() {
-  if (ffmpeg?.loaded) return ffmpeg;
-  if (ffmpegLoadPromise) return ffmpegLoadPromise;
+  pushPipelineDebug('ensureFFmpegLoaded:start', `loaded=${Boolean(ffmpeg?.loaded)} pending=${Boolean(ffmpegLoadPromise)}`);
+  if (ffmpeg?.loaded) {
+    pushPipelineDebug('ensureFFmpegLoaded:cached');
+    return ffmpeg;
+  }
+  if (ffmpegLoadPromise) {
+    pushPipelineDebug('ensureFFmpegLoaded:await-existing');
+    return ffmpegLoadPromise;
+  }
 
   ffmpeg = new FFmpeg();
   ffmpeg.on('log', ({ message }) => {
@@ -417,10 +478,13 @@ async function ensureFFmpegLoaded() {
     });
 
     const coreURL = new URL('./src/vendor/ffmpeg-core/ffmpeg-core.js', import.meta.url).href;
+    pushPipelineDebug('ensureFFmpegLoaded:core-url-ready');
     updateProcessing({ percent: 12, detail: 'FFmpeg JS core loaded. Preparing WASM…' });
     const wasmURL = new URL('./src/vendor/ffmpeg-core/ffmpeg-core.wasm', import.meta.url).href;
+    pushPipelineDebug('ensureFFmpegLoaded:wasm-url-ready');
     updateProcessing({ percent: 20, detail: 'FFmpeg WASM located locally. Initializing…' });
     await ffmpeg.load({ coreURL, wasmURL });
+    pushPipelineDebug('ensureFFmpegLoaded:loaded');
     updateProcessing({ percent: 25, detail: 'FFmpeg is ready.' });
     return ffmpeg;
   })();
@@ -433,6 +497,7 @@ async function ensureFFmpegLoaded() {
 }
 
 async function extractAudioWithFFmpeg(file, jobId) {
+  pushPipelineDebug('extractAudioWithFFmpeg:start', `file=${file.name} size=${file.size}`);
   const worker = await ensureFFmpegLoaded();
   if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
 
@@ -442,21 +507,36 @@ async function extractAudioWithFFmpeg(file, jobId) {
 
   try {
     updateProcessing({
-      stage: 'Preparing audio extraction',
-      detail: 'Writing your local file into the FFmpeg virtual file system…',
-      percent: 28,
-      hint: 'Your file stays local in the browser.',
+      stage: 'Reading video file',
+      detail: 'Reading your local video file into memory…',
+      percent: 26,
+      hint: 'On phones, large videos can take a while before FFmpeg starts.',
     });
 
-    await worker.writeFile(inputName, await fetchFile(file));
+    pushPipelineDebug('extractAudioWithFFmpeg:fetchFile:start');
+    const inputData = await fetchFile(file);
+    pushPipelineDebug('extractAudioWithFFmpeg:fetchFile:done', `bytes=${inputData?.byteLength || inputData?.length || 0}`);
+    if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
+
+    updateProcessing({
+      stage: 'Preparing audio extraction',
+      detail: 'Copying the video into FFmpeg working memory…',
+      percent: 32,
+      hint: 'This step is local, but can be slow for large videos on mobile.',
+    });
+
+    pushPipelineDebug('extractAudioWithFFmpeg:writeFile:start', inputName);
+    await worker.writeFile(inputName, inputData);
+    pushPipelineDebug('extractAudioWithFFmpeg:writeFile:done', inputName);
 
     updateProcessing({
       stage: 'Extracting audio',
-      detail: 'FFmpeg is running. Please wait…',
-      percent: 30,
+      detail: 'FFmpeg is extracting the audio track…',
+      percent: 38,
       hint: 'Larger videos take longer here.',
     });
 
+    pushPipelineDebug('extractAudioWithFFmpeg:exec:start');
     await worker.exec([
       '-i', inputName,
       '-vn',
@@ -465,6 +545,7 @@ async function extractAudioWithFFmpeg(file, jobId) {
       '-sample_fmt', 's16',
       outputName,
     ]);
+    pushPipelineDebug('extractAudioWithFFmpeg:exec:done');
 
     if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
 
@@ -475,7 +556,9 @@ async function extractAudioWithFFmpeg(file, jobId) {
       hint: 'The next step decodes audio and computes waveform peaks.',
     });
 
+    pushPipelineDebug('extractAudioWithFFmpeg:readFile:start', outputName);
     const data = await worker.readFile(outputName);
+    pushPipelineDebug('extractAudioWithFFmpeg:readFile:done', outputName);
     const uint8 = data instanceof Uint8Array ? data : new Uint8Array(data.buffer || data);
     return uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
   } finally {
@@ -484,6 +567,11 @@ async function extractAudioWithFFmpeg(file, jobId) {
       worker.deleteFile(outputName),
     ]);
   }
+}
+
+function isAudioOnlyFile(file) {
+  if (!file) return false;
+  return Boolean(file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(file.name));
 }
 
 function computePeaksFromChannelData(channelData) {
@@ -514,25 +602,61 @@ function normalizePeaks(peaks) {
 }
 
 async function buildWaveformFromFile(file, jobId) {
+  resetPipelineDebug();
+  pushPipelineDebug('buildWaveformFromFile:start', `file=${file.name} type=${file.type || 'unknown'} size=${file.size}`);
+  pushPipelineDebug('buildWaveformFromFile:before-startProcessing');
   startProcessing(
     'Preparing file',
-    'Preparing real waveform extraction…',
+    isAudioOnlyFile(file)
+      ? 'Preparing real waveform extraction for audio…'
+      : 'Preparing real waveform extraction for video…',
     'Everything runs locally in your browser. No file is uploaded.',
     2,
   );
 
-  const wavBuffer = await extractAudioWithFFmpeg(file, jobId);
-  if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
+  pushPipelineDebug('buildWaveformFromFile:after-startProcessing');
+
+  let context = null;
+  let audioSourceBuffer;
+  const audioOnly = isAudioOnlyFile(file);
+  pushPipelineDebug('buildWaveformFromFile:file-kind', audioOnly ? 'audio-only' : 'video');
+
+  if (audioOnly) {
+    updateProcessing({
+      stage: 'Reading audio file',
+      detail: 'Audio file detected. Skipping FFmpeg extraction and decoding directly in the browser…',
+      percent: 28,
+      hint: 'This is faster on phones for MP3/M4A/WAV and similar audio files.',
+    });
+
+    pushPipelineDebug('buildWaveformFromFile:audio-file-arrayBuffer:start');
+    audioSourceBuffer = await file.arrayBuffer();
+    pushPipelineDebug('buildWaveformFromFile:audio-file-arrayBuffer:done');
+  } else {
+    pushPipelineDebug('buildWaveformFromFile:video-path');
+    audioSourceBuffer = await extractAudioWithFFmpeg(file, jobId);
+    if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
+  }
 
   updateProcessing({
     stage: 'Decoding audio',
-    detail: 'Decoding the extracted WAV in the browser…',
+    detail: isAudioOnlyFile(file)
+      ? 'Decoding the audio file in the browser…'
+      : 'Decoding the extracted WAV in the browser…',
     percent: 88,
     hint: 'Waveform sampling starts after this step.',
   });
 
-  const context = await ensureAudioContext();
-  const audioBuffer = await context.decodeAudioData(wavBuffer);
+  pushPipelineDebug('buildWaveformFromFile:before-audio-context');
+  context = await ensureAudioContext();
+  pushPipelineDebug('buildWaveformFromFile:after-audio-context', `state=${context.state}`);
+  if (context.state === 'suspended') {
+    pushPipelineDebug('buildWaveformFromFile:audio-context-still-suspended');
+  }
+
+  pushPipelineDebug('buildWaveformFromFile:decodeAudioData:start');
+  const audioBuffer = await context.decodeAudioData(audioSourceBuffer.slice(0));
+  pushPipelineDebug('buildWaveformFromFile:decodeAudioData:done', `channels=${audioBuffer.numberOfChannels} duration=${audioBuffer.duration.toFixed(2)}`);
   if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
 
   updateProcessing({
@@ -542,16 +666,20 @@ async function buildWaveformFromFile(file, jobId) {
     hint: 'Almost done.',
   });
 
+  pushPipelineDebug('buildWaveformFromFile:computePeaks:start');
   sourcePeaks = computePeaksFromChannelData(audioBuffer.getChannelData(0));
+  pushPipelineDebug('buildWaveformFromFile:computePeaks:done', `peaks=${sourcePeaks.length}`);
   waveformPeaks = [];
   drawWaveform();
   setStatus('Real waveform generated');
   finishProcessing(true, 'Real waveform is ready');
+  pushPipelineDebug('buildWaveformFromFile:done');
 }
 
 async function loadFile(file) {
   if (!file) return;
 
+  pushPipelineDebug('loadFile:start', `file=${file.name} type=${file.type || 'unknown'} size=${file.size}`);
   const jobId = ++currentJobId;
   currentFile = file;
   syncMediaMode(file);
@@ -566,16 +694,21 @@ async function loadFile(file) {
   video.classList.add('ready');
   emptyState.hidden = true;
 
+  pushPipelineDebug('loadFile:before-resetCanvas');
   resetCanvas();
+  pushPipelineDebug('loadFile:after-resetCanvas');
   seekBar.value = 0;
   currentTimeTextEl.textContent = '00:00';
   remainingTimeTextEl.textContent = '-00:00';
   lastTimelineTextSecond = -1;
 
   try {
+    pushPipelineDebug('loadFile:before-buildWaveformFromFile');
     await buildWaveformFromFile(file, jobId);
+    pushPipelineDebug('loadFile:after-buildWaveformFromFile');
   } catch (error) {
     console.error(error);
+    pushPipelineDebug('loadFile:error', error?.message || String(error));
     if (jobId !== currentJobId) return;
     sourcePeaks = generatePlaceholderPeaks(1200);
     waveformPeaks = [];
@@ -672,6 +805,31 @@ function handleSeekByRatio(ratio) {
   const clamped = Math.max(0, Math.min(1, ratio));
   video.currentTime = clamped * video.duration;
   updateTimeline(true);
+
+  if (zoomLevel > 1) {
+    const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || 0;
+    const playheadCssX = clamped * canvasCssWidth;
+    scrollWaveViewportToPlayhead(playheadCssX, 0.18);
+  }
+}
+
+function handleSeekFromViewportPointer(event) {
+  if (!video.duration || !Number.isFinite(video.duration)) return;
+
+  if (!(isMobileViewport() && zoomLevel > 1)) {
+    handleSeekByRatio(getCanvasRatioFromPointer(event));
+    return;
+  }
+
+  const rect = waveViewport.getBoundingClientRect();
+  const viewportRatio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const absoluteCssX = waveViewport.scrollLeft + viewportRatio * rect.width;
+  const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || rect.width;
+  const absoluteRatio = Math.max(0, Math.min(1, absoluteCssX / canvasCssWidth));
+
+  video.currentTime = absoluteRatio * video.duration;
+  updateTimeline(true);
+  scrollWaveViewportToPlayhead(absoluteCssX, 0.18);
 }
 
 function enforceLoopPlayback() {
@@ -732,12 +890,43 @@ function togglePlayPause() {
   updatePlayPauseButton();
 }
 
+async function triggerOpenFilePicker({ warmupAudio = true } = {}) {
+  if (processingState.active) return;
+
+  if (warmupAudio) {
+    try {
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+    } catch (error) {
+      console.warn('AudioContext warmup failed:', error);
+    }
+  }
+
+  videoFileInput.click();
+}
+
+openFileBtn.addEventListener('click', () => {
+  triggerOpenFilePicker({ warmupAudio: true });
+});
+
 videoFileInput.addEventListener('change', (event) => {
   const [file] = event.target.files || [];
   if (file) loadFile(file);
+  event.target.value = '';
 });
 
-clearBtn.addEventListener('click', clearCurrentFile);
+function handleClearAction() {
+  pipelineDebugLines = [];
+  updateDebugPanel();
+  clearCurrentFile();
+}
+
+clearBtn.addEventListener('click', handleClearAction);
+mobileClearBtn.addEventListener('click', handleClearAction);
 stopBtn.addEventListener('click', stopToStart);
 playPauseBtn.addEventListener('click', togglePlayPause);
 clearLoopBtn.addEventListener('click', () => {
@@ -750,25 +939,31 @@ setBBtn.addEventListener('click', setLoopPointB);
 
 zoomSlider.addEventListener('input', () => {
   zoomLevel = Number(zoomSlider.value);
+  updateViewportCursorVisibility();
+  updateZoomLabel();
   lastDrawnProgress = -1;
   drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+
+  if (video.duration > 0 && zoomLevel > 1) {
+    const progress = (video.currentTime || 0) / video.duration;
+    const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || 0;
+    scrollWaveViewportToPlayhead(progress * canvasCssWidth, 0.18);
+  }
 });
 
 speedSlider.addEventListener('input', () => {
   updatePlaybackRate(Number(speedSlider.value) / 10);
 });
 
-regenBtn.addEventListener('click', async () => {
-  if (!currentFile || processingState.active) return;
-  const jobId = ++currentJobId;
-  try {
-    await buildWaveformFromFile(currentFile, jobId);
-  } catch (error) {
-    console.error(error);
-    if (jobId !== currentJobId) return;
-    setStatus(`Regeneration failed: ${error.message || 'unknown error'}`);
-    finishProcessing(false, error.message || 'Regeneration failed');
-  }
+shortcutBtn.addEventListener('click', () => {
+  const willShow = shortcutPopover.hidden;
+  shortcutPopover.hidden = !willShow;
+});
+
+window.addEventListener('click', (event) => {
+  if (shortcutPopover.hidden) return;
+  if (shortcutPopover.contains(event.target) || shortcutBtn.contains(event.target)) return;
+  shortcutPopover.hidden = true;
 });
 
 video.addEventListener('loadedmetadata', () => {
@@ -806,10 +1001,19 @@ seekBar.addEventListener('input', () => {
   handleSeekByRatio(Number(seekBar.value) / 1000);
 });
 
-waveCanvas.addEventListener('pointerdown', (event) => {
+waveViewport.addEventListener('pointerdown', (event) => {
   if (!video.duration || !Number.isFinite(video.duration)) return;
   waveCanvas.style.cursor = 'pointer';
-  handleSeekByRatio(getCanvasRatioFromPointer(event));
+  isPointerSeekingWaveform = true;
+  handleSeekFromViewportPointer(event);
+});
+
+window.addEventListener('pointerup', () => {
+  isPointerSeekingWaveform = false;
+});
+
+window.addEventListener('pointercancel', () => {
+  isPointerSeekingWaveform = false;
 });
 
 window.addEventListener('keydown', (event) => {
@@ -890,9 +1094,18 @@ dropZone.addEventListener('drop', (event) => {
   if (file) loadFile(file);
 });
 
+dropZone.addEventListener('click', (event) => {
+  if (processingState.active) return;
+  if (currentFile) return;
+  if (event.target.closest('button, input, summary, a, video')) return;
+  triggerOpenFilePicker({ warmupAudio: false });
+});
+
 window.addEventListener('resize', () => {
+  updateViewportCursorVisibility();
   lastDrawnProgress = -1;
   drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+  updateDebugPanel();
 });
 window.addEventListener('beforeunload', stopPlaybackAnimation);
 
@@ -900,4 +1113,6 @@ updateProcessingUi();
 updateLoopButtons();
 updatePlaybackRate(1);
 updatePlayPauseButton();
+updateViewportCursorVisibility();
+updateZoomLabel();
 drawWaveform();

@@ -16,49 +16,44 @@
         </div>
       </header>
 
-      <section class="card controls-card">
-        <div class="file-picker-row">
-          <div class="file-picker-left">
-            <label class="file-btn" for="videoFile">Open file</label>
-            <input id="videoFile" type="file" accept="video/*,audio/*" />
-            <button id="clearBtn" class="ghost-btn" type="button">Clear</button>
-          </div>
-          <details class="shortcut-help">
-            <summary aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</summary>
-            <div class="shortcut-popover">
-              <div class="shortcut-title">Keyboard shortcuts</div>
-              <div class="shortcut-list">
-                <div><kbd>Space</kbd><span>Play / pause</span></div>
-                <div><kbd>[</kbd><span>Set A</span></div>
-                <div><kbd>]</kbd><span>Set B</span></div>
-                <div><kbd>Esc</kbd><span>Clear A-B loop</span></div>
-                <div><kbd>-</kbd><span>Slower by 0.1×</span></div>
-                <div><kbd>+</kbd><span>Faster by 0.1×</span></div>
-                <div><kbd>0</kbd><span>Reset speed to 1.0×</span></div>
-              </div>
-            </div>
-          </details>
-        </div>
-      </section>
-
       <section class="card viewer-card">
+        <input id="videoFile" class="sr-only-file-input" type="file" accept="video/*,audio/*,.mp4,.mov,.m4v,.webm,.mkv,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" tabindex="-1" aria-hidden="true" />
         <div id="dropZone" class="media-stage">
+          <button id="mobileClearBtn" class="mobile-clear-btn" type="button" aria-label="Clear" title="Clear">×</button>
           <video id="video" controls playsinline></video>
           <div id="emptyState" class="empty-state">
-            <div class="empty-title">Drop media here, or open one from your device.</div>
+            <div class="empty-title">Drop media here, or tap here to open one from your device.</div>
             <div class="empty-subtitle">Everything runs locally in your browser.</div>
           </div>
         </div>
 
         <div class="wave-strip-shell">
           <div class="wave-strip-toolbar">
+            <div class="wave-toolbar-left">
+              <button id="openFileBtn" class="file-btn toolbar-file-btn" type="button">Open</button>
+              <button id="clearBtn" class="icon-btn toolbar-clear-btn" type="button" aria-label="Clear" title="Clear">×</button>
+              <button id="shortcutBtn" class="icon-btn shortcut-icon-btn" type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
+              <div id="shortcutPopover" class="shortcut-popover toolbar-shortcut-popover" hidden>
+                <div class="shortcut-title">Keyboard shortcuts</div>
+                <div class="shortcut-list">
+                  <div><kbd>Space</kbd><span>Play / pause</span></div>
+                  <div><kbd>[</kbd><span>Set A</span></div>
+                  <div><kbd>]</kbd><span>Set B</span></div>
+                  <div><kbd>Esc</kbd><span>Clear A-B loop</span></div>
+                  <div><kbd>-</kbd><span>Slower by 0.1×</span></div>
+                  <div><kbd>+</kbd><span>Faster by 0.1×</span></div>
+                  <div><kbd>0</kbd><span>Reset speed to 1.0×</span></div>
+                </div>
+              </div>
+            </div>
             <div class="ab-loop-controls">
               <button id="setABtn" class="loop-btn" type="button">A</button>
               <button id="setBBtn" class="loop-btn" type="button">B</button>
               <button id="clearLoopBtn" class="loop-btn loop-btn-clear" type="button">×</button>
             </div>
-            <div class="wave-toolbar-right">
+            <div class="wave-toolbar-bottom">
               <label class="speed-control" for="speedSlider">
+                <span>Speed</span>
                 <span id="speedLabel">1.0×</span>
                 <input id="speedSlider" type="range" min="1" max="20" step="1" value="10" list="speedMarks" />
                 <datalist id="speedMarks">
@@ -71,9 +66,9 @@
               </label>
               <label class="zoom-control" for="zoomSlider">
                 <span>Zoom</span>
+                <span id="zoomLabel">1×</span>
                 <input id="zoomSlider" type="range" min="1" max="24" step="1" value="1" />
               </label>
-              <button id="regenBtn" class="icon-btn" type="button" aria-label="Regenerate waveform" title="Regenerate waveform">↻</button>
             </div>
           </div>
 
