@@ -1,69 +1,91 @@
 # web-video-trans
 
-一个纯前端、本地处理的小工具原型：
+A local-first web app for carefully listening to, inspecting, and transcribing music from video or audio files.
 
-- 选择本地视频/音频文件
-- 直接在浏览器里播放
-- 用 `ffmpeg.wasm` 在浏览器本地抽取真实音轨
-- 把真实音轨解码后生成波形进度条
-- 点击波形或拖动滑条进行跳转
-- 无后端、无文件上传
+## What this app is for
 
-## 启动
+This tool is mainly designed for **music transcription** work:
+
+- slowing down a performance without changing workflow complexity too much
+- zooming into the waveform to inspect short phrases, attacks, and note boundaries
+- looping small sections with A/B markers
+- using EQ presets (and manual EQ shaping) to bring out instruments or voices you want to hear more clearly
+- working from local video/audio files directly in the browser, without uploading them anywhere
+
+Typical use cases:
+
+- transcribing guitar lines from a live clip
+- checking bass movement in a dense mix
+- isolating vocal details for melody or lyric transcription
+- inspecting drums, saxophone, trumpet, piano, or other instruments with EQ emphasis
+- learning by ear from downloaded performance videos or screen-recorded clips
+
+## Core features
+
+- **Local-only processing**: files stay in your browser
+- **Waveform view**: inspect timing and phrase boundaries visually
+- **Zoom + seek**: move around precisely in the material
+- **A/B loop**: repeat short passages for close listening
+- **Speed control**: slow material down for transcription
+- **Graphic EQ**:
+  - preset EQ targets such as Guitar, Bass, Saxophone, Piano, Vocal, Trumpet, Drums
+  - draggable EQ points for manual shaping
+- **Video + audio support**: load common local media formats directly
+
+## Why it is useful for transcription
+
+When transcribing music, the hard part is often not just hearing the note — it is hearing the note **clearly enough, enough times, in a small enough window**, to make a confident decision.
+
+This app helps with that by combining:
+
+- repeat listening
+- waveform-guided navigation
+- playback speed adjustment
+- spectral emphasis via EQ
+
+That combination makes it easier to:
+
+- detect note starts and endings
+- hear inner parts in a mix
+- compare repeated phrases
+- confirm articulation, rhythm, and pitch movement
+
+## Workflow suggestion
+
+A practical transcription workflow in this app:
+
+1. Open a local video or audio file
+2. Find the phrase you want to study
+3. Set an A/B loop around the phrase
+4. Reduce speed if needed
+5. Apply an EQ preset that highlights the target instrument
+6. Fine-tune the EQ by dragging the graphic EQ points
+7. Zoom into the waveform for more accurate seeking
+8. Repeat until the phrase is clear enough to write down
+
+## Notes
+
+- The app is meant for **careful listening and transcription**, not full DAW-style production.
+- EQ presets are heuristic listening aids, not mixing presets.
+- Results depend on the source audio and arrangement density.
+
+## Local development
 
 ```bash
-cd ~/Documents/Projects/web-video-trans
 npm install
 npm run dev
 ```
 
-打开终端输出里的本地地址，通常是：
+Then open the local Vite URL shown in the terminal.
 
-```text
-http://localhost:5173
-```
-
-## 构建
+If you want to test from a phone on the same Wi‑Fi:
 
 ```bash
-npm run build
+npm run dev -- --host 0.0.0.0
 ```
 
-构建产物在：
+Then open:
 
 ```text
-dist/
+http://<your-mac-lan-ip>:5173/web-video-trans/
 ```
-
-## 技术路线
-
-- `Vite`：静态前端开发/构建
-- `@ffmpeg/ffmpeg`：在浏览器里运行 ffmpeg
-- `@ffmpeg/util`：文件与 blob URL 工具
-- `AudioContext.decodeAudioData()`：解码 ffmpeg 输出的 WAV
-- `Canvas`：绘制可点击的波形进度条
-
-## 当前行为
-
-1. 选择本地视频
-2. 浏览器加载 `ffmpeg.wasm` 内核（首次较慢）
-3. 在浏览器本地把视频音轨抽成单声道 16k WAV
-4. 解码 WAV
-5. 计算 peaks
-6. 绘制真实波形
-
-## 注意事项
-
-- 首次使用会下载 ffmpeg core，体积较大
-- 大视频会比较吃 CPU / 内存
-- 全程本地处理，不会上传视频文件
-- 如果切换文件，旧任务会自动作废
-
-## 后续建议
-
-如果下一步要继续做，我建议按这个顺序：
-
-1. 加一个更明确的进度条（ffmpeg 抽取进度）
-2. 做 Web Worker，避免主线程卡顿
-3. 支持导出音频 / 字幕 / 切片
-4. 进一步优化移动端体验

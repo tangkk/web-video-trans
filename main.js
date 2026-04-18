@@ -33,8 +33,13 @@ const processingDetailEl = document.getElementById('processingDetail');
 const processingPercentEl = document.getElementById('processingPercent');
 const progressFillEl = document.getElementById('progressFill');
 const processingHintEl = document.getElementById('processingHint');
+const eqPanel = document.getElementById('eqPanel');
+const eqPresetBadge = document.getElementById('eqPresetBadge');
+const eqPresets = document.getElementById('eqPresets');
+const eqGraphCanvas = document.getElementById('eqGraphCanvas');
 
 const ctx = waveCanvas.getContext('2d');
+const eqGraphCtx = eqGraphCanvas.getContext('2d');
 
 let objectUrl = null;
 let audioContext = null;
@@ -55,6 +60,23 @@ let lastPlayheadX = 0;
 let lastPlayheadCssX = 0;
 let pipelineDebugLines = [];
 let pipelineDebugStartedAt = 0;
+const EQ_PRESETS = {
+  flat: { label: 'Flat', gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+  guitar: { label: 'Guitar', gains: [-3, -2, -1, 0, 1, 2, 3, 2, 0, -1] },
+  bass: { label: 'Bass', gains: [5, 5, 4, 2, 0, -1, -2, -3, -3, -3] },
+  saxophone: { label: 'Saxophone', gains: [-3, -2, -1, 1, 2, 3, 3, 2, 0, -1] },
+  piano: { label: 'Piano', gains: [-2, -1, 0, 1, 2, 2, 1, 1, 0, -1] },
+  vocal: { label: 'Vocal', gains: [-4, -3, -2, -1, 1, 3, 4, 3, 1, -1] },
+  trumpet: { label: 'Trumpet', gains: [-5, -4, -3, -1, 1, 3, 4, 4, 2, 0] },
+  drums: { label: 'Drums', gains: [4, 4, 3, 1, -1, 0, 2, 3, 2, 0] },
+};
+const EQ_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+
+let mediaSourceNode = null;
+let eqFilters = [];
+let currentEqPreset = 'flat';
+let currentEqGains = [...EQ_PRESETS.flat.gains];
+let activeEqBandIndex = null;
 let loopState = {
   enabledA: false,
   enabledB: false,
@@ -97,6 +119,149 @@ function updateZoomLabel() {
   zoomLabel.textContent = `${zoomLevel}×`;
 }
 
+function getEqGraphMetrics() {
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = eqGraphCanvas.clientWidth || 320;
+  const cssHeight = 150;
+  const width = Math.floor(cssWidth * dpr);
+  const height = Math.floor(cssHeight * dpr);
+  const padX = width * 0.08;
+  const midY = height / 2;
+  const maxGain = 6;
+  const graphHeight = height * 0.28;
+  return { dpr, cssWidth, cssHeight, width, height, padX, midY, maxGain, graphHeight };
+}
+
+function getEqPoints(metrics = getEqGraphMetrics()) {
+  const { width, padX, midY, maxGain, graphHeight } = metrics;
+  const stepX = (width - padX * 2) / (EQ_FREQUENCIES.length - 1);
+  return currentEqGains.map((gain, index) => ({
+    x: padX + stepX * index,
+    y: midY - (gain / maxGain) * graphHeight,
+  }));
+}
+
+function drawEqGraph() {
+  const metrics = getEqGraphMetrics();
+  const { width, height, cssHeight, padX, midY, maxGain, graphHeight } = metrics;
+
+  if (eqGraphCanvas.width !== width || eqGraphCanvas.height !== height) {
+    eqGraphCanvas.width = width;
+    eqGraphCanvas.height = height;
+  }
+  eqGraphCanvas.style.height = `${cssHeight}px`;
+
+  eqGraphCtx.clearRect(0, 0, width, height);
+  eqGraphCtx.fillStyle = '#ffffff';
+  eqGraphCtx.fillRect(0, 0, width, height);
+
+  eqGraphCtx.strokeStyle = 'rgba(0,0,0,0.08)';
+  eqGraphCtx.lineWidth = 1;
+  for (let i = -6; i <= 6; i += 3) {
+    const y = midY - (i / maxGain) * graphHeight;
+    eqGraphCtx.beginPath();
+    eqGraphCtx.moveTo(padX, y);
+    eqGraphCtx.lineTo(width - padX, y);
+    eqGraphCtx.stroke();
+  }
+
+  eqGraphCtx.strokeStyle = 'rgba(0,0,0,0.16)';
+  eqGraphCtx.beginPath();
+  eqGraphCtx.moveTo(padX, midY);
+  eqGraphCtx.lineTo(width - padX, midY);
+  eqGraphCtx.stroke();
+
+  const points = getEqPoints(metrics);
+
+  eqGraphCtx.strokeStyle = '#111111';
+  eqGraphCtx.lineWidth = Math.max(2, width * 0.004);
+  eqGraphCtx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) eqGraphCtx.moveTo(point.x, point.y);
+    else eqGraphCtx.lineTo(point.x, point.y);
+  });
+  eqGraphCtx.stroke();
+
+  points.forEach((point, index) => {
+    eqGraphCtx.fillStyle = activeEqBandIndex === index ? '#d94827' : '#111111';
+    eqGraphCtx.beginPath();
+    eqGraphCtx.arc(point.x, point.y, Math.max(4, width * 0.009), 0, Math.PI * 2);
+    eqGraphCtx.fill();
+
+    eqGraphCtx.fillStyle = '#666666';
+    eqGraphCtx.font = `${Math.max(9, width * 0.016)}px Inter, sans-serif`;
+    eqGraphCtx.textAlign = 'center';
+    const label = EQ_FREQUENCIES[index] >= 1000
+      ? `${EQ_FREQUENCIES[index] / 1000}k`
+      : `${EQ_FREQUENCIES[index]}`;
+    if (index % 2 === 0 || index === EQ_FREQUENCIES.length - 1) {
+      eqGraphCtx.fillText(label, point.x, height - 10);
+    }
+
+    if (activeEqBandIndex === index) {
+      eqGraphCtx.fillStyle = '#d94827';
+      eqGraphCtx.fillText(`${currentEqGains[index]} dB`, point.x, Math.max(14, point.y - 12));
+    }
+  });
+}
+
+function updateEqUi() {
+  if (eqPresetBadge) {
+    eqPresetBadge.textContent = EQ_PRESETS[currentEqPreset]?.label || 'Custom';
+  }
+
+  if (eqPresets) {
+    eqPresets.querySelectorAll('[data-eq-preset]').forEach((button) => {
+      button.classList.toggle('is-active', button.dataset.eqPreset === currentEqPreset);
+    });
+  }
+
+  drawEqGraph();
+}
+
+async function ensureEqChain() {
+  const context = await ensureAudioContext();
+  if (!mediaSourceNode) {
+    mediaSourceNode = context.createMediaElementSource(video);
+  }
+  if (!eqFilters.length) {
+    eqFilters = EQ_FREQUENCIES.map((frequency, index) => {
+      const filter = context.createBiquadFilter();
+      filter.type = index === 0 ? 'lowshelf' : index === EQ_FREQUENCIES.length - 1 ? 'highshelf' : 'peaking';
+      filter.frequency.value = frequency;
+      filter.Q.value = 1.0;
+      filter.gain.value = 0;
+      return filter;
+    });
+
+    mediaSourceNode.disconnect();
+    let previousNode = mediaSourceNode;
+    eqFilters.forEach((filter) => {
+      previousNode.connect(filter);
+      previousNode = filter;
+    });
+    previousNode.connect(context.destination);
+  }
+  return context;
+}
+
+async function syncEqFiltersToCurrentGains() {
+  if (!currentFile) return;
+  const context = await ensureEqChain();
+  eqFilters.forEach((filter, index) => {
+    const gain = currentEqGains[index] ?? 0;
+    filter.gain.setTargetAtTime(gain, context.currentTime, 0.015);
+  });
+}
+
+async function applyEqPreset(presetKey) {
+  if (!EQ_PRESETS[presetKey]) return;
+  currentEqPreset = presetKey;
+  currentEqGains = [...EQ_PRESETS[presetKey].gains];
+  updateEqUi();
+  await syncEqFiltersToCurrentGains();
+}
+
 function resetPipelineDebug() {
   pipelineDebugLines = [];
   pipelineDebugStartedAt = performance.now();
@@ -111,6 +276,35 @@ function pushPipelineDebug(label, extra = '') {
 }
 
 function updateDebugPanel() {}
+
+function updateEqBandFromPointer(event) {
+  const rect = eqGraphCanvas.getBoundingClientRect();
+  const metrics = getEqGraphMetrics();
+  const points = getEqPoints(metrics);
+  const dpr = metrics.dpr;
+  const x = (event.clientX - rect.left) * dpr;
+  const y = (event.clientY - rect.top) * dpr;
+
+  if (activeEqBandIndex == null) {
+    let closestIndex = -1;
+    let closestDistance = Infinity;
+    points.forEach((point, index) => {
+      const distance = Math.hypot(point.x - x, point.y - y);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    });
+    if (closestDistance > 28 * dpr) return;
+    activeEqBandIndex = closestIndex;
+  }
+
+  const gain = ((metrics.midY - y) / metrics.graphHeight) * metrics.maxGain;
+  currentEqPreset = 'custom';
+  currentEqGains[activeEqBandIndex] = Math.max(-6, Math.min(6, Math.round(gain)));
+  updateEqUi();
+  syncEqFiltersToCurrentGains();
+}
 
 function stepPlaybackRate(delta) {
   updatePlaybackRate(playbackRate + delta);
@@ -934,6 +1128,37 @@ clearLoopBtn.addEventListener('click', () => {
   drawWaveform(video.duration ? video.currentTime / video.duration : 0);
   setStatus(describeLoopState());
 });
+if (eqPresets) {
+  eqPresets.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-eq-preset]');
+    if (!button) return;
+    applyEqPreset(button.dataset.eqPreset);
+  });
+}
+
+if (eqGraphCanvas) {
+  eqGraphCanvas.addEventListener('pointerdown', (event) => {
+    activeEqBandIndex = null;
+    updateEqBandFromPointer(event);
+    if (activeEqBandIndex != null) {
+      eqGraphCanvas.setPointerCapture(event.pointerId);
+    }
+  });
+
+  eqGraphCanvas.addEventListener('pointermove', (event) => {
+    if (activeEqBandIndex == null) return;
+    updateEqBandFromPointer(event);
+  });
+
+  const stopEqDrag = () => {
+    activeEqBandIndex = null;
+    drawEqGraph();
+  };
+
+  eqGraphCanvas.addEventListener('pointerup', stopEqDrag);
+  eqGraphCanvas.addEventListener('pointercancel', stopEqDrag);
+}
+
 setABtn.addEventListener('click', setLoopPointA);
 setBBtn.addEventListener('click', setLoopPointB);
 
@@ -1115,4 +1340,5 @@ updatePlaybackRate(1);
 updatePlayPauseButton();
 updateViewportCursorVisibility();
 updateZoomLabel();
+updateEqUi();
 drawWaveform();

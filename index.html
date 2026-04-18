@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Video/Audio Waveform Viewer</title>
+    <title>Video/Audio Inspector</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -11,8 +11,8 @@
       <header class="home-hero">
         <div class="home-hero-copy">
           <p class="home-eyebrow">local video · local audio extraction · no upload</p>
-          <h1 class="site-title home-title">Video/Audio Waveform Viewer</h1>
-          <p class="hero-subtitle">Hints: use screencap apps or YT downloads get a video/audio of your interest!</p>
+          <h1 class="site-title home-title">Video/Audio Inspector</h1>
+          <p class="hero-subtitle">Hints: use screencap apps or YT downloads get a video/audio of your interest before you use this!</p>
         </div>
       </header>
 
@@ -91,6 +91,29 @@
             <input id="seekBar" type="range" min="0" max="1000" value="0" step="1" />
             <span id="remainingTimeText">-00:00</span>
           </div>
+
+          <details class="eq-panel" id="eqPanel">
+            <summary class="eq-summary">
+              <span>EQ</span>
+              <span id="eqPresetBadge" class="eq-preset-badge">Flat</span>
+            </summary>
+            <div class="eq-body">
+              <p class="eq-note">Boost common frequency ranges for quick instrument-focused listening.</p>
+              <div class="eq-presets" id="eqPresets">
+                <button class="eq-preset-btn is-active" type="button" data-eq-preset="flat">Flat</button>
+                <button class="eq-preset-btn" type="button" data-eq-preset="guitar">Guitar</button>
+                <button class="eq-preset-btn" type="button" data-eq-preset="bass">Bass</button>
+                <button class="eq-preset-btn" type="button" data-eq-preset="saxophone">Saxophone</button>
+                <button class="eq-preset-btn" type="button" data-eq-preset="piano">Piano</button>
+                <button class="eq-preset-btn" type="button" data-eq-preset="vocal">Vocal</button>
+                <button class="eq-preset-btn" type="button" data-eq-preset="trumpet">Trumpet</button>
+                <button class="eq-preset-btn" type="button" data-eq-preset="drums">Drums</button>
+              </div>
+              <div class="eq-graph-wrap">
+                <canvas id="eqGraphCanvas" class="eq-graph-canvas" width="640" height="180" aria-label="Graphic EQ preview"></canvas>
+              </div>
+            </div>
+          </details>
         </div>
 
         <div id="processingPanel" class="processing-panel" hidden>

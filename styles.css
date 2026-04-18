@@ -402,6 +402,89 @@ video.ready {
   margin-top: 8px;
 }
 
+.eq-panel {
+  margin-top: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: #fafaf7;
+  overflow: hidden;
+}
+
+.eq-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.eq-summary::-webkit-details-marker {
+  display: none;
+}
+
+.eq-preset-badge {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.eq-body {
+  padding: 0 14px 14px;
+}
+
+.eq-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.eq-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.eq-preset-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.eq-preset-btn.is-active {
+  background: #111111;
+  border-color: #111111;
+  color: #ffffff;
+}
+
+.eq-graph-wrap {
+  margin-top: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.eq-graph-canvas {
+  width: 100%;
+  height: 150px;
+  display: block;
+}
+
+.eq-graph-canvas {
+  touch-action: none;
+}
+
 .transport-controls {
   display: inline-flex;
   align-items: center;
