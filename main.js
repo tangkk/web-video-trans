@@ -7,6 +7,7 @@ const videoFileInput = document.getElementById('videoFile');
 const dropZone = document.getElementById('dropZone');
 const emptyState = document.getElementById('emptyState');
 const mobileClearBtn = document.getElementById('mobileClearBtn');
+const mobileAudioClearBtn = document.getElementById('mobileAudioClearBtn');
 const statusTextEl = document.getElementById('statusText');
 const waveViewport = document.getElementById('waveViewport');
 const waveCanvas = document.getElementById('waveCanvas');
@@ -392,6 +393,7 @@ function setBusyUi(busy) {
   openFileBtn.disabled = busy;
   clearBtn.disabled = busy;
   mobileClearBtn.disabled = busy || !currentFile;
+  if (mobileAudioClearBtn) mobileAudioClearBtn.disabled = busy || !currentFile;
   stopBtn.disabled = busy || !currentFile;
   shortcutBtn.disabled = busy;
   setABtn.disabled = busy || !currentFile;
@@ -1731,6 +1733,7 @@ function handleClearAction() {
 
 clearBtn.addEventListener('click', handleClearAction);
 mobileClearBtn.addEventListener('click', handleClearAction);
+if (mobileAudioClearBtn) mobileAudioClearBtn.addEventListener('click', handleClearAction);
 stopBtn.addEventListener('click', stopToStart);
 playPauseBtn.addEventListener('click', togglePlayPause);
 clearLoopBtn.addEventListener('click', () => {

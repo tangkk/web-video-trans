@@ -231,6 +231,10 @@ body {
   display: none;
 }
 
+.viewer-card.audio-mode .wave-strip-shell {
+  position: relative;
+}
+
 .media-stage {
   position: relative;
   display: grid;
@@ -284,6 +288,7 @@ video.ready {
 }
 
 .wave-strip-shell {
+  position: relative;
   margin-top: 8px;
   padding: 8px 10px 12px;
   border: 1px solid var(--border-soft);
@@ -762,6 +767,20 @@ video.ready {
     line-height: 1;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
+  }
+
+  .mobile-audio-clear-btn {
+    display: inline-flex;
+    top: 18px;
+    right: 18px;
+    z-index: 12;
+    border-color: rgba(0,0,0,0.08);
+    background: rgba(255,255,255,0.92);
+    color: #111111;
+  }
+
+  .media-stage .mobile-clear-btn {
+    display: none;
   }
 
   .mobile-clear-btn:disabled {
