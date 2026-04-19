@@ -1800,10 +1800,12 @@ function handleSeekFromViewportPointer(event) {
 
 function isNearWaveformCursor(event, thresholdPx = 16) {
   if (!video.duration || !Number.isFinite(video.duration)) return false;
+
   const rect = waveCanvas.getBoundingClientRect();
   const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || rect.width;
   if (!canvasCssWidth) return false;
-  const absolutePointerX = waveViewport.scrollLeft + (event.clientX - rect.left);
+
+  const absolutePointerX = event.clientX - rect.left;
   return Math.abs(absolutePointerX - lastPlayheadCssX) <= thresholdPx;
 }
 
@@ -2562,6 +2564,8 @@ waveViewport.addEventListener('pointermove', (event) => {
   const nearCursor = isNearWaveformCursor(event, 16);
   updateViewportCursorVisibility(event);
   waveViewport.classList.toggle('cursor-scrub-hover', !waveformHandleDrag.active && !waveformCursorDrag.active && nearCursor);
+  // disabled hover marker for now
+  waveViewport.classList.remove('cursor-scrub-hover');
 
   if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId) {
     handleSeekFromViewportPointer(event);
