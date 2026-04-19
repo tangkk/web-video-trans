@@ -101,7 +101,11 @@
             </summary>
             <div id="transcribeBody" class="transcribe-body">
               <div class="transcribe-roll-wrap">
-                <canvas id="transcribeCanvas" class="transcribe-canvas" width="960" height="260" aria-label="Transcribed piano roll"></canvas>
+                <div id="transcribeViewport" class="transcribe-viewport" aria-label="Transcribed piano roll viewport">
+                  <canvas id="transcribeCanvas" class="transcribe-canvas" width="960" height="260" aria-label="Transcribed piano roll"></canvas>
+                  <div id="transcribeHoverLabel" class="transcribe-hover-label" hidden></div>
+                </div>
+                <input id="transcribeScrollBar" class="transcribe-scrollbar" type="range" min="0" max="0" step="1" value="0" aria-label="Scroll transcription horizontally" />
               </div>
               <div class="transcribe-controls-block">
                 <p class="transcribe-note">Turn the current A-B loop into a piano-roll note view. Best on one dominant instrument. Max 30s.</p>

@@ -48,9 +48,12 @@ const transcribeBody = document.getElementById('transcribeBody');
 const transcribeBadge = document.getElementById('transcribeBadge');
 const transcribeBtn = document.getElementById('transcribeBtn');
 const transcribeMeta = document.getElementById('transcribeMeta');
+const transcribeScrollBar = document.getElementById('transcribeScrollBar');
+const transcribeHoverLabel = document.getElementById('transcribeHoverLabel');
 
 const ctx = waveCanvas.getContext('2d');
 const eqGraphCtx = eqGraphCanvas.getContext('2d');
+const transcribeViewport = document.getElementById('transcribeViewport');
 const transcribeCanvas = document.getElementById('transcribeCanvas');
 
 const transcribeCtx = transcribeCanvas.getContext('2d');
@@ -365,16 +368,33 @@ function setTranscribeState(status, message = '', detail = '', progress = 0) {
 
 function resizeTranscribeCanvas() {
   const dpr = window.devicePixelRatio || 1;
-  const cssWidth = transcribeCanvas.clientWidth || 640;
   const cssHeight = 260;
-  const width = Math.max(480, Math.floor(cssWidth * dpr));
+  const viewportCssWidth = transcribeViewport?.clientWidth || transcribeCanvas.clientWidth || 640;
+  const duration = Math.max(0, transcribeResult?.duration || getLoopSpanSeconds() || 0);
+  const visibleSeconds = 10;
+  const pixelsPerSecond = viewportCssWidth / visibleSeconds;
+  const targetCssWidth = duration > visibleSeconds
+    ? Math.max(viewportCssWidth, Math.ceil(duration * pixelsPerSecond))
+    : viewportCssWidth;
+  const width = Math.max(480, Math.floor(targetCssWidth * dpr));
   const height = Math.max(240, Math.floor(cssHeight * dpr));
 
+  transcribeCanvas.style.width = `${targetCssWidth}px`;
   transcribeCanvas.style.height = `${cssHeight}px`;
   if (transcribeCanvas.width !== width || transcribeCanvas.height !== height) {
     transcribeCanvas.width = width;
     transcribeCanvas.height = height;
   }
+
+  requestAnimationFrame(syncTranscribeScrollbar);
+}
+
+function syncTranscribeScrollbar() {
+  if (!transcribeViewport || !transcribeScrollBar) return;
+  const maxScroll = Math.max(0, Math.round(transcribeViewport.scrollWidth - transcribeViewport.clientWidth));
+  transcribeScrollBar.max = String(maxScroll);
+  transcribeScrollBar.value = String(Math.min(maxScroll, Math.round(transcribeViewport.scrollLeft)));
+  transcribeScrollBar.disabled = maxScroll <= 0;
 }
 
 function getTranscriptionMetrics() {
@@ -427,8 +447,49 @@ function getTranscribeCursorSeconds() {
   return Math.max(0, Math.min(transcribeResult.duration, relative));
 }
 
+function scrollTranscribeViewportToCursor(cursorCssX, marginRatio = 0.18) {
+  if (!transcribeViewport) return;
+  const viewportWidth = transcribeViewport.clientWidth;
+  if (!viewportWidth) return;
+
+  const canvasCssWidth = parseFloat(transcribeCanvas.style.width || '0') || viewportWidth;
+  const margin = Math.max(36, viewportWidth * marginRatio);
+  const left = transcribeViewport.scrollLeft;
+  const right = left + viewportWidth;
+  const maxScroll = Math.max(0, canvasCssWidth - viewportWidth);
+
+  let targetLeft = left;
+  if (cursorCssX < left + margin) {
+    targetLeft = cursorCssX - margin;
+  } else if (cursorCssX > right - margin) {
+    targetLeft = cursorCssX - viewportWidth + margin;
+  }
+
+  transcribeViewport.scrollLeft = Math.max(0, Math.min(maxScroll, targetLeft));
+  syncTranscribeScrollbar();
+}
+
+function keepTranscribeCursorInView() {
+  if (!transcribeResult || !transcribeViewport) return;
+  if (activeTranscribePointerId != null) return;
+
+  const cursorSeconds = getTranscribeCursorSeconds();
+  if (cursorSeconds == null) return;
+
+  const duration = Math.max(0.001, transcribeResult.duration || getLoopSpanSeconds() || 1);
+  const canvasCssWidth = parseFloat(transcribeCanvas.style.width || '0') || transcribeViewport.clientWidth || 0;
+  const { padLeft, padRight } = getTranscriptionMetrics();
+  const dpr = window.devicePixelRatio || 1;
+  const padLeftCss = padLeft / dpr;
+  const padRightCss = padRight / dpr;
+  const innerCssWidth = Math.max(1, canvasCssWidth - padLeftCss - padRightCss);
+  const cursorCssX = padLeftCss + (cursorSeconds / duration) * innerCssWidth;
+
+  scrollTranscribeViewportToCursor(cursorCssX, 0.18);
+}
+
 function getTranscribeNoteAtEvent(event) {
-  if (!transcribeResult?.notes?.length) return { index: -1, note: null };
+  if (!transcribeResult?.notes?.length) return { index: -1, note: null, noteRect: null };
   const rect = transcribeCanvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const x = (event.clientX - rect.left) * dpr;
@@ -448,11 +509,11 @@ function getTranscribeNoteAtEvent(event) {
     const noteY = padTop + (row / pitchSpan) * innerHeight + 1;
     const noteH = Math.max(4, innerHeight / pitchSpan - 2);
     if (x >= noteX && x <= noteX + noteWidth && y >= noteY && y <= noteY + noteH) {
-      return { index: i, note };
+      return { index: i, note, noteRect: { x: noteX, y: noteY, width: noteWidth, height: noteH } };
     }
   }
 
-  return { index: -1, note: null };
+  return { index: -1, note: null, noteRect: null };
 }
 
 function midiToFrequency(midi) {
@@ -494,6 +555,21 @@ async function startSustainedTranscribedPitch(pitchMidi) {
   gain.connect(context.destination);
   oscillator.start();
   transcribePitchPreviewNodes.push({ oscillator, gain, pitchMidi });
+}
+
+function updateTranscribeHoverLabel(note, noteRect) {
+  if (!transcribeHoverLabel || !transcribeViewport || !note || !noteRect) {
+    if (transcribeHoverLabel) transcribeHoverLabel.hidden = true;
+    return;
+  }
+
+  const dpr = window.devicePixelRatio || 1;
+  const noteCenterX = noteRect.x + noteRect.width / 2;
+  const noteTopY = noteRect.y;
+  transcribeHoverLabel.textContent = formatNoteName(note.pitchMidi);
+  transcribeHoverLabel.style.left = `${noteCenterX / dpr}px`;
+  transcribeHoverLabel.style.top = `${noteTopY / dpr}px`;
+  transcribeHoverLabel.hidden = false;
 }
 
 function getPitchFromTranscribeYAxis(event) {
@@ -570,7 +646,7 @@ function drawTranscriptionRoll() {
     transcribeCtx.stroke();
 
     transcribeCtx.fillStyle = '#777777';
-    transcribeCtx.font = `${Math.max(10, width * 0.012)}px Inter, sans-serif`;
+    transcribeCtx.font = `10px Inter, sans-serif`;
     transcribeCtx.textAlign = i === 0 ? 'left' : i === ticks ? 'right' : 'center';
     transcribeCtx.textBaseline = 'top';
     transcribeCtx.fillText(`${(ratio * duration).toFixed(1)}s`, x, height - padBottom + 6);
@@ -584,7 +660,7 @@ function drawTranscriptionRoll() {
     transcribeCtx.fillStyle = isNatural ? 'rgba(0,0,0,0.03)' : 'rgba(0,0,0,0.06)';
     transcribeCtx.fillRect(0, y, padLeft - 6, rowHeight);
     transcribeCtx.fillStyle = '#777777';
-    transcribeCtx.font = `${Math.max(9, width * 0.011)}px Inter, sans-serif`;
+    transcribeCtx.font = `${Math.max(9, Math.min(12, rowHeight * 0.58))}px Inter, sans-serif`;
     transcribeCtx.textAlign = 'right';
     transcribeCtx.textBaseline = 'middle';
     transcribeCtx.fillText(formatNoteName(pitch), padLeft - 8, y + rowHeight / 2);
@@ -610,6 +686,8 @@ function drawTranscriptionRoll() {
     transcribeCtx.fillStyle = 'rgba(217,72,39,0.92)';
     transcribeCtx.fillRect(cursorX, padTop, Math.max(2, width * 0.0018), innerHeight);
   }
+
+  requestAnimationFrame(keepTranscribeCursorInView);
 }
 
 
@@ -2776,13 +2854,36 @@ window.addEventListener('resize', () => {
   lastDrawnProgress = -1;
   drawWaveform(video.duration ? video.currentTime / video.duration : 0);
   drawTranscriptionRoll();
+  syncTranscribeScrollbar();
   updateDebugPanel();
 });
 
+if (transcribeViewport && transcribeScrollBar) {
+  transcribeViewport.addEventListener('scroll', () => {
+    syncTranscribeScrollbar();
+  }, { passive: true });
+
+  transcribeScrollBar.addEventListener('input', () => {
+    transcribeViewport.scrollLeft = Number(transcribeScrollBar.value || 0);
+  });
+
+  transcribeScrollBar.addEventListener('wheel', (event) => {
+    const maxScroll = Math.max(0, transcribeViewport.scrollWidth - transcribeViewport.clientWidth);
+    if (maxScroll <= 0) return;
+
+    event.preventDefault();
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    const next = Math.max(0, Math.min(maxScroll, transcribeViewport.scrollLeft + delta));
+    transcribeViewport.scrollLeft = next;
+    syncTranscribeScrollbar();
+  }, { passive: false });
+}
+
 if (transcribeCanvas) {
   transcribeCanvas.addEventListener('pointermove', async (event) => {
-    const { index, note } = getTranscribeNoteAtEvent(event);
+    const { index, note, noteRect } = getTranscribeNoteAtEvent(event);
     transcribeHoverNoteIndex = index;
+    updateTranscribeHoverLabel(note, noteRect);
     const axisPitch = getPitchFromTranscribeYAxis(event);
     transcribeCanvas.style.cursor = note || axisPitch != null ? 'pointer' : 'default';
 
@@ -2800,6 +2901,7 @@ if (transcribeCanvas) {
 
   transcribeCanvas.addEventListener('pointerleave', () => {
     transcribeHoverNoteIndex = -1;
+    updateTranscribeHoverLabel(null, null);
     transcribeCanvas.style.cursor = 'default';
     drawTranscriptionRoll();
   });
@@ -2829,6 +2931,16 @@ if (transcribeCanvas) {
 
   transcribeCanvas.addEventListener('wheel', (event) => {
     if (!transcribeResult?.notes?.length) return;
+
+    const canScrollHorizontally = Boolean(transcribeViewport)
+      && transcribeViewport.scrollWidth > transcribeViewport.clientWidth + 1;
+    const wantsHorizontalScroll = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      || Math.abs(event.deltaY) < 1;
+
+    if (canScrollHorizontally && !event.shiftKey && wantsHorizontalScroll) {
+      return;
+    }
+
     event.preventDefault();
     const direction = Math.sign(event.deltaY) || 1;
     const step = event.shiftKey ? 12 : 3;
