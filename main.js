@@ -2636,31 +2636,10 @@ waveViewport.addEventListener('pointerdown', (event) => {
     return;
   }
 
-  if (event.pointerType === 'mouse' && isNearWaveformCursor(event, 12)) {
-    waveformCursorDrag.active = true;
-    waveformCursorDrag.pointerId = event.pointerId;
-    waveformCursorDrag.continuousPlay = false;
-    clearWaveformCursorIdleTimer();
-    clearWaveformCursorHoldScrubTimer();
-    stopShortAudioLoop();
-    video.pause();
-    try {
-      waveViewport.setPointerCapture(event.pointerId);
-    } catch (error) {
-      pushPipelineDebug('waveform:cursor:pointercapture:set:error', error?.message || String(error));
-    }
-    pushPipelineDebug('waveform:cursor:drag:start', `pointer=${event.pointerType} id=${event.pointerId}`);
-    handleSeekFromViewportPointer(event);
-    playScrubPreviewAt(video.currentTime).catch((error) => {
-      pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
-    });
-    armCursorHoldScrub();
-    setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
-    return;
-  }
-
   let handle = null;
-  if (isLoopActive()) {
+  if (event.pointerType === 'mouse') {
+    handle = getWaveformHandleHit(event);
+  } else if (isLoopActive()) {
     handle = getWaveformHandleHit(event, { allowNearest: true });
   } else {
     handle = getWaveformHandleHit(event);
@@ -2692,6 +2671,29 @@ waveViewport.addEventListener('pointerdown', (event) => {
   } else {
     waveformHandleDrag.pendingHandle = null;
     syncWaveViewportTouchAction();
+  }
+
+  if (event.pointerType === 'mouse' && isNearWaveformCursor(event, 12)) {
+    waveformCursorDrag.active = true;
+    waveformCursorDrag.pointerId = event.pointerId;
+    waveformCursorDrag.continuousPlay = false;
+    clearWaveformCursorIdleTimer();
+    clearWaveformCursorHoldScrubTimer();
+    stopShortAudioLoop();
+    video.pause();
+    try {
+      waveViewport.setPointerCapture(event.pointerId);
+    } catch (error) {
+      pushPipelineDebug('waveform:cursor:pointercapture:set:error', error?.message || String(error));
+    }
+    pushPipelineDebug('waveform:cursor:drag:start', `pointer=${event.pointerType} id=${event.pointerId}`);
+    handleSeekFromViewportPointer(event);
+    playScrubPreviewAt(video.currentTime).catch((error) => {
+      pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
+    });
+    armCursorHoldScrub();
+    setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
+    return;
   }
 
   startWaveformPointerGesture(event);
