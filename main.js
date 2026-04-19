@@ -33,6 +33,9 @@ const processingDetailEl = document.getElementById('processingDetail');
 const processingPercentEl = document.getElementById('processingPercent');
 const progressFillEl = document.getElementById('progressFill');
 const processingHintEl = document.getElementById('processingHint');
+const debugPanel = document.getElementById('debugPanel');
+const copyDebugBtn = document.getElementById('copyDebugBtn');
+const clearDebugBtn = document.getElementById('clearDebugBtn');
 const eqPanel = document.getElementById('eqPanel');
 const eqPresetBadge = document.getElementById('eqPresetBadge');
 const eqPresets = document.getElementById('eqPresets');
@@ -56,10 +59,26 @@ let lastTimelineTextSecond = -1;
 let zoomLevel = 1;
 let playbackRate = 1;
 let isPointerSeekingWaveform = false;
+let waveformPointerGesture = null;
+let waveformLongPressTimer = null;
+let waveformPreviewLoopInterval = null;
+let isWaveformLongPressPreviewActive = false;
+let waveformLongPressPreviewPlayToken = 0;
+let waveformPlaybackPrimed = false;
+let waveformLongPressPreview = {
+  active: false,
+  start: 0,
+  end: 0,
+};
+let waveformRangeSelect = {
+  active: false,
+  anchorRatio: 0,
+};
 let lastPlayheadX = 0;
 let lastPlayheadCssX = 0;
 let pipelineDebugLines = [];
 let pipelineDebugStartedAt = 0;
+let lastProgressDebugAt = -1;
 const EQ_PRESETS = {
   flat: { label: 'Flat', gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
   guitar: { label: 'Guitar', gains: [-3, -2, -1, 0, 1, 2, 3, 2, 0, -1] },
@@ -275,7 +294,12 @@ function pushPipelineDebug(label, extra = '') {
   updateDebugPanel();
 }
 
-function updateDebugPanel() {}
+function updateDebugPanel() {
+  if (!debugPanel) return;
+  debugPanel.textContent = pipelineDebugLines.length
+    ? pipelineDebugLines.join('\n')
+    : 'debug panel ready';
+}
 
 function updateEqBandFromPointer(event) {
   const rect = eqGraphCanvas.getBoundingClientRect();
@@ -962,6 +986,14 @@ function updateTimeline(forceText = false) {
     lastTimelineTextSecond = currentWholeSecond;
   }
 
+  if (!video.paused && duration > 0) {
+    const progressDebugBucket = Math.floor(currentTime * 4) / 4;
+    if (progressDebugBucket !== lastProgressDebugAt) {
+      lastProgressDebugAt = progressDebugBucket;
+      pushPipelineDebug('video:progress', `current=${currentTime.toFixed(3)} paused=${video.paused} loop=${isLoopActive()} preview=${waveformLongPressPreview.active}`);
+    }
+  }
+
   if (duration > 0) {
     const progress = currentTime / duration;
     seekBar.value = String(Math.round(progress * 1000));
@@ -989,6 +1021,12 @@ function playbackAnimationLoop() {
   }
 }
 
+function clearDebugLog() {
+  pipelineDebugLines = [];
+  pipelineDebugStartedAt = performance.now();
+  updateDebugPanel();
+}
+
 function startPlaybackAnimation() {
   stopPlaybackAnimation();
   playbackAnimationLoop();
@@ -1007,33 +1045,289 @@ function handleSeekByRatio(ratio) {
   }
 }
 
-function handleSeekFromViewportPointer(event) {
-  if (!video.duration || !Number.isFinite(video.duration)) return;
+function getViewportPointerRatio(event) {
+  if (!video.duration || !Number.isFinite(video.duration)) return 0;
 
   if (!(isMobileViewport() && zoomLevel > 1)) {
-    handleSeekByRatio(getCanvasRatioFromPointer(event));
-    return;
+    return getCanvasRatioFromPointer(event);
   }
 
   const rect = waveViewport.getBoundingClientRect();
   const viewportRatio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
   const absoluteCssX = waveViewport.scrollLeft + viewportRatio * rect.width;
   const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || rect.width;
-  const absoluteRatio = Math.max(0, Math.min(1, absoluteCssX / canvasCssWidth));
+  return Math.max(0, Math.min(1, absoluteCssX / canvasCssWidth));
+}
 
-  video.currentTime = absoluteRatio * video.duration;
+function handleSeekFromViewportPointer(event) {
+  if (!video.duration || !Number.isFinite(video.duration)) return;
+
+  const ratio = getViewportPointerRatio(event);
+  handleSeekByRatio(ratio);
+}
+
+function clearWaveformLongPressTimer() {
+  if (waveformLongPressTimer !== null) {
+    pushPipelineDebug('waveform:longpress-timer:clear');
+    clearTimeout(waveformLongPressTimer);
+    waveformLongPressTimer = null;
+  }
+}
+
+function stopWaveformPreviewLoopWatcher() {
+  if (waveformPreviewLoopInterval !== null) {
+    clearInterval(waveformPreviewLoopInterval);
+    waveformPreviewLoopInterval = null;
+    pushPipelineDebug('waveform:v2:preview:watcher:stop');
+  }
+}
+
+function startWaveformPreviewLoopWatcher() {
+  stopWaveformPreviewLoopWatcher();
+  waveformPreviewLoopInterval = window.setInterval(() => {
+    if (!waveformLongPressPreview.active || video.paused || video.ended) return;
+    const epsilon = 0.045;
+    if (video.currentTime >= waveformLongPressPreview.end - epsilon) {
+      video.currentTime = waveformLongPressPreview.start;
+    }
+  }, 16);
+  pushPipelineDebug('waveform:v2:preview:watcher:start');
+}
+
+function startWaveformLongPressPreview(event) {
+  if (!video.duration || !Number.isFinite(video.duration)) {
+    pushPipelineDebug('waveform:v2:preview:start:skipped', 'invalid duration');
+    return;
+  }
+  const ratio = getViewportPointerRatio(event);
+  const start = Math.max(0, Math.min(video.duration, ratio * video.duration));
+  const end = Math.max(start, Math.min(video.duration, start + 1));
+  const playToken = ++waveformLongPressPreviewPlayToken;
+
+  pushPipelineDebug('waveform:v2:preview:start', `pointer=${event.pointerType || 'unknown'} ratio=${ratio.toFixed(4)} start=${start.toFixed(3)} end=${end.toFixed(3)} token=${playToken}`);
+  waveformLongPressPreview = {
+    active: true,
+    start,
+    end,
+  };
+  isWaveformLongPressPreviewActive = true;
+  handleSeekByRatio(ratio);
+  startWaveformPreviewLoopWatcher();
+
+  const playResult = video.play();
+  if (playResult && typeof playResult.then === 'function') {
+    playResult.then(() => {
+      if (playToken !== waveformLongPressPreviewPlayToken || !waveformLongPressPreview.active) {
+        pushPipelineDebug('waveform:v2:preview:play:stale', `token=${playToken}`);
+        return;
+      }
+      pushPipelineDebug('waveform:v2:preview:play:ok', `token=${playToken}`);
+    }).catch((error) => {
+      if (playToken !== waveformLongPressPreviewPlayToken) {
+        pushPipelineDebug('waveform:v2:preview:play:ignored-error', `token=${playToken} ${error?.message || String(error)}`);
+        return;
+      }
+      pushPipelineDebug('waveform:v2:preview:play:error', error?.message || String(error));
+    });
+  } else {
+    pushPipelineDebug('waveform:v2:preview:play:sync-ok', `token=${playToken}`);
+  }
+  setStatus(`Preview loop: ${formatTime(start)} → ${formatTime(end)}`);
+}
+
+function stopWaveformLongPressPreview() {
+  if (!waveformLongPressPreview.active) {
+    pushPipelineDebug('waveform:v2:preview:stop:noop');
+    isWaveformLongPressPreviewActive = false;
+    stopWaveformPreviewLoopWatcher();
+    return;
+  }
+
+  waveformLongPressPreviewPlayToken += 1;
+  pushPipelineDebug('waveform:v2:preview:stop', `at=${video.currentTime.toFixed(3)} token=${waveformLongPressPreviewPlayToken}`);
+  waveformLongPressPreview = {
+    active: false,
+    start: 0,
+    end: 0,
+  };
+  isWaveformLongPressPreviewActive = false;
+  stopWaveformPreviewLoopWatcher();
+  video.pause();
   updateTimeline(true);
-  scrollWaveViewportToPlayhead(absoluteCssX, 0.18);
+  setStatus(currentFile ? 'Paused' : 'Waiting for a file');
+}
+
+function resetWaveformPointerGesture() {
+  if (waveformPointerGesture) {
+    pushPipelineDebug('waveform:gesture:reset', `pointer=${waveformPointerGesture.pointerType} id=${waveformPointerGesture.pointerId} long=${waveformPointerGesture.longPressTriggered}`);
+    try {
+      waveViewport.releasePointerCapture(waveformPointerGesture.pointerId);
+    } catch (error) {
+      pushPipelineDebug('waveform:pointercapture:release:error', error?.message || String(error));
+    }
+  }
+  waveformRangeSelect.active = false;
+  clearWaveformLongPressTimer();
+  waveformPointerGesture = null;
+  isPointerSeekingWaveform = false;
+}
+
+function shouldUseDeferredWaveformSeek(event) {
+  return event.pointerType === 'touch';
+}
+
+function isMousePointer(event) {
+  return event.pointerType === 'mouse';
+}
+
+function startWaveformPointerGesture(event) {
+  clearWaveformLongPressTimer();
+  pushPipelineDebug('waveform:v2:gesture:start', `pointer=${event.pointerType} id=${event.pointerId} x=${event.clientX.toFixed(1)} y=${event.clientY.toFixed(1)}`);
+  waveformPointerGesture = {
+    pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    startX: event.clientX,
+    startY: event.clientY,
+    lastX: event.clientX,
+    lastY: event.clientY,
+    longPressTriggered: false,
+  };
+
+  try {
+    waveViewport.setPointerCapture(event.pointerId);
+    pushPipelineDebug('waveform:v2:pointercapture:set', `id=${event.pointerId}`);
+  } catch (error) {
+    pushPipelineDebug('waveform:v2:pointercapture:set:error', error?.message || String(error));
+  }
+
+  if (event.pointerType !== 'touch' && event.pointerType !== 'mouse') {
+    pushPipelineDebug('waveform:v2:longpress:disabled', `pointer=${event.pointerType}`);
+    return;
+  }
+
+  waveformLongPressTimer = window.setTimeout(() => {
+    if (!waveformPointerGesture || waveformPointerGesture.pointerId !== event.pointerId) {
+      pushPipelineDebug('waveform:v2:longpress:timer:fired:stale', `id=${event.pointerId}`);
+      return;
+    }
+    waveformPointerGesture.longPressTriggered = true;
+
+    if (event.pointerType === 'touch') {
+      if (!waveformPlaybackPrimed) {
+        waveformPlaybackPrimed = true;
+        pushPipelineDebug('waveform:v2:playback:primed', `pointer=${event.pointerType}`);
+      }
+      pushPipelineDebug('waveform:v2:longpress:timer:fired', `pointer=${event.pointerType} id=${event.pointerId} x=${waveformPointerGesture.lastX.toFixed(1)} y=${waveformPointerGesture.lastY.toFixed(1)}`);
+      startWaveformLongPressPreview({
+        ...event,
+        pointerType: event.pointerType,
+        clientX: waveformPointerGesture.lastX,
+        clientY: waveformPointerGesture.lastY,
+      });
+      return;
+    }
+
+    if (event.pointerType === 'mouse') {
+      waveformRangeSelect.active = true;
+      waveformRangeSelect.anchorRatio = getViewportPointerRatio({
+        ...event,
+        clientX: waveformPointerGesture.lastX,
+        clientY: waveformPointerGesture.lastY,
+      });
+      pushPipelineDebug('waveform:v2:range:start', `anchor=${waveformRangeSelect.anchorRatio.toFixed(4)}`);
+    }
+  }, 420);
+  pushPipelineDebug('waveform:v2:longpress:timer:set', `delay=420 id=${event.pointerId}`);
+}
+
+function updateWaveformPointerGesture(event) {
+  if (!waveformPointerGesture || waveformPointerGesture.pointerId !== event.pointerId) return;
+  waveformPointerGesture.lastX = event.clientX;
+  waveformPointerGesture.lastY = event.clientY;
+
+  const deltaX = event.clientX - waveformPointerGesture.startX;
+  const deltaY = event.clientY - waveformPointerGesture.startY;
+  const movedFar = Math.hypot(deltaX, deltaY) > 12;
+  pushPipelineDebug('waveform:gesture:move', `pointer=${event.pointerType} id=${event.pointerId} dx=${deltaX.toFixed(1)} dy=${deltaY.toFixed(1)} long=${waveformPointerGesture.longPressTriggered}`);
+
+  if (movedFar && !waveformPointerGesture.longPressTriggered && event.pointerType === 'touch') {
+    pushPipelineDebug('waveform:longpress:cancel-by-touch-move', `id=${event.pointerId}`);
+    clearWaveformLongPressTimer();
+  }
+
+  if (waveformRangeSelect.active && event.pointerType === 'mouse' && video.duration && Number.isFinite(video.duration)) {
+    const currentRatio = getViewportPointerRatio(event);
+    const startRatio = Math.min(waveformRangeSelect.anchorRatio, currentRatio);
+    const endRatio = Math.max(waveformRangeSelect.anchorRatio, currentRatio);
+    loopState.enabledA = true;
+    loopState.enabledB = true;
+    loopState.start = startRatio * video.duration;
+    loopState.end = endRatio * video.duration;
+    pushPipelineDebug('waveform:v2:range:update', `start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)} span=${(loopState.end - loopState.start).toFixed(3)}`);
+    updateLoopButtons();
+    drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+    setStatus(`Selecting A-B: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+  }
+
+}
+
+function finishWaveformPointerGesture(event) {
+  if (!waveformPointerGesture || waveformPointerGesture.pointerId !== event.pointerId) return;
+
+  pushPipelineDebug('waveform:gesture:end', `pointer=${waveformPointerGesture.pointerType} id=${event.pointerId} long=${waveformPointerGesture.longPressTriggered} x=${event.clientX.toFixed(1)} y=${event.clientY.toFixed(1)}`);
+  const triggeredLongPress = waveformPointerGesture.longPressTriggered;
+  const pointerType = waveformPointerGesture.pointerType;
+
+  if (waveformRangeSelect.active && pointerType === 'mouse') {
+    waveformRangeSelect.active = false;
+    pushPipelineDebug('waveform:v2:range:end', `start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)} active=${isLoopActive()}`);
+    if (isLoopActive()) {
+      video.currentTime = loopState.start;
+      updateTimeline(true);
+      pushPipelineDebug('waveform:v2:range:seek-to-a', `at=${loopState.start.toFixed(3)}`);
+      setStatus(`A-B loop: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+    } else {
+      clearLoop();
+      drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+      setStatus('A-B loop cleared');
+    }
+    stopWaveformLongPressPreview();
+    resetWaveformPointerGesture();
+    return;
+  }
+
+  if (!triggeredLongPress) {
+    pushPipelineDebug('waveform:seek:on-release', `pointer=${pointerType}`);
+    handleSeekFromViewportPointer(event);
+  }
+
+  stopWaveformLongPressPreview();
+  resetWaveformPointerGesture();
 }
 
 function enforceLoopPlayback() {
+  if (waveformLongPressPreview.active) {
+    const epsilon = Math.max(0.01, 1 / 60);
+    if (video.currentTime < waveformLongPressPreview.start) {
+      video.currentTime = waveformLongPressPreview.start;
+    }
+
+    if (video.currentTime >= waveformLongPressPreview.end - epsilon) {
+      video.currentTime = waveformLongPressPreview.start;
+    }
+    return;
+  }
+
   if (!isLoopActive()) return;
 
-  if (video.currentTime < loopState.start) {
+  const loopEpsilon = 0.03;
+  if (video.currentTime < loopState.start - loopEpsilon) {
+    pushPipelineDebug('ab:clamp-to-a', `current=${video.currentTime.toFixed(3)} start=${loopState.start.toFixed(3)}`);
     video.currentTime = loopState.start;
   }
 
-  if (video.currentTime >= loopState.end) {
+  if (video.currentTime >= loopState.end - loopEpsilon) {
+    pushPipelineDebug('ab:loop', `current=${video.currentTime.toFixed(3)} start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)}`);
     video.currentTime = loopState.start;
   }
 }
@@ -1072,12 +1366,24 @@ function setLoopPointB() {
 }
 
 function togglePlayPause() {
-  if (!currentFile || !video.src) return;
+  if (!currentFile || !video.src) {
+    pushPipelineDebug('playback:toggle:ignored', 'no current file');
+    return;
+  }
+  pushPipelineDebug('playback:toggle', `paused=${video.paused} ended=${video.ended} current=${video.currentTime.toFixed(3)} loop=${isLoopActive()}`);
   if (video.paused || video.ended) {
     if (isLoopActive() && (video.currentTime < loopState.start || video.currentTime >= loopState.end)) {
       video.currentTime = loopState.start;
+      pushPipelineDebug('playback:toggle:seek-to-a', `at=${loopState.start.toFixed(3)}`);
     }
-    video.play();
+    const playResult = video.play();
+    if (playResult && typeof playResult.then === 'function') {
+      playResult.then(() => {
+        pushPipelineDebug('playback:toggle:play:ok');
+      }).catch((error) => {
+        pushPipelineDebug('playback:toggle:play:error', error?.message || String(error));
+      });
+    }
   } else {
     video.pause();
   }
@@ -1180,6 +1486,26 @@ speedSlider.addEventListener('input', () => {
   updatePlaybackRate(Number(speedSlider.value) / 10);
 });
 
+if (copyDebugBtn) {
+  copyDebugBtn.addEventListener('click', async () => {
+    const debugText = pipelineDebugLines.length ? pipelineDebugLines.join('\n') : 'debug panel ready';
+    try {
+      await navigator.clipboard.writeText(debugText);
+      setStatus('Debug log copied');
+    } catch (error) {
+      pushPipelineDebug('debug:copy:error', error?.message || String(error));
+      setStatus('Debug log copy failed');
+    }
+  });
+}
+
+if (clearDebugBtn) {
+  clearDebugBtn.addEventListener('click', () => {
+    clearDebugLog();
+    setStatus('Debug log cleared');
+  });
+}
+
 shortcutBtn.addEventListener('click', () => {
   const willShow = shortcutPopover.hidden;
   shortcutPopover.hidden = !willShow;
@@ -1202,14 +1528,18 @@ video.addEventListener('timeupdate', () => {
   updateTimeline(false);
 });
 video.addEventListener('play', () => {
+  lastProgressDebugAt = -1;
+  pushPipelineDebug('video:event:play', `current=${video.currentTime.toFixed(3)} loop=${isLoopActive()}`);
   if (isLoopActive() && (video.currentTime < loopState.start || video.currentTime >= loopState.end)) {
     video.currentTime = loopState.start;
+    pushPipelineDebug('video:event:play:seek-to-a', `at=${loopState.start.toFixed(3)}`);
   }
   updatePlayPauseButton();
   setStatus(isLoopActive() ? `Looping ${formatTime(loopState.start)} → ${formatTime(loopState.end)}` : 'Playing');
   startPlaybackAnimation();
 });
 video.addEventListener('pause', () => {
+  pushPipelineDebug('video:event:pause', `current=${video.currentTime.toFixed(3)}`);
   stopPlaybackAnimation();
   updatePlayPauseButton();
   setStatus(currentFile ? 'Paused' : 'Waiting for a file');
@@ -1227,17 +1557,39 @@ seekBar.addEventListener('input', () => {
 });
 
 waveViewport.addEventListener('pointerdown', (event) => {
-  if (!video.duration || !Number.isFinite(video.duration)) return;
-  waveCanvas.style.cursor = 'pointer';
-  isPointerSeekingWaveform = true;
-  handleSeekFromViewportPointer(event);
+  if (!video.duration || !Number.isFinite(video.duration)) {
+    pushPipelineDebug('waveform:pointerdown:ignored', 'invalid duration');
+    return;
+  }
+  startWaveformPointerGesture(event);
 });
 
-window.addEventListener('pointerup', () => {
+waveViewport.addEventListener('pointermove', (event) => {
+  updateWaveformPointerGesture(event);
+});
+
+waveViewport.addEventListener('contextmenu', (event) => {
+  pushPipelineDebug('waveform:contextmenu', `preview=${isWaveformLongPressPreviewActive}`);
+  if (!isWaveformLongPressPreviewActive) return;
+  event.preventDefault();
+});
+
+window.addEventListener('pointerup', (event) => {
+  pushPipelineDebug('window:pointerup', `pointer=${event.pointerType} id=${event.pointerId}`);
+  if (waveformPointerGesture && waveformPointerGesture.pointerId === event.pointerId) {
+    finishWaveformPointerGesture(event);
+    return;
+  }
   isPointerSeekingWaveform = false;
 });
 
-window.addEventListener('pointercancel', () => {
+window.addEventListener('pointercancel', (event) => {
+  pushPipelineDebug('window:pointercancel', `pointer=${event.pointerType} id=${event.pointerId}`);
+  if (waveformPointerGesture && waveformPointerGesture.pointerId === event.pointerId) {
+    stopWaveformLongPressPreview();
+    resetWaveformPointerGesture();
+    return;
+  }
   isPointerSeekingWaveform = false;
 });
 

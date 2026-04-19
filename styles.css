@@ -599,12 +599,56 @@ video.ready {
   font-size: 12px;
 }
 
-.debug-panel {
+.debug-panel-shell {
   margin-top: 10px;
-  padding: 10px 12px;
   border: 1px dashed var(--border);
   border-radius: 12px;
   background: #fafaf7;
+  overflow: hidden;
+}
+
+.debug-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px dashed var(--border-soft);
+  background: rgba(255,255,255,0.55);
+}
+
+.debug-panel-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.debug-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.debug-copy-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.debug-copy-btn:hover {
+  background: var(--surface-3);
+  border-color: #cfcfc7;
+}
+
+.debug-panel {
+  margin: 0;
+  padding: 10px 12px;
   color: #333333;
   font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap;
