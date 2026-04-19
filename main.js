@@ -46,6 +46,16 @@ const eqGraphCtx = eqGraphCanvas.getContext('2d');
 
 let objectUrl = null;
 let audioContext = null;
+let decodedAudioBuffer = null;
+let shortLoopSourceNode = null;
+let shortLoopGainNode = null;
+let shortLoopPlayback = {
+  active: false,
+  start: 0,
+  end: 0,
+  startedAtContextTime: 0,
+  offsetAtStart: 0,
+};
 let waveformPeaks = [];
 let sourcePeaks = [];
 let currentFile = null;
@@ -278,6 +288,10 @@ async function syncEqFiltersToCurrentGains() {
     const gain = currentEqGains[index] ?? 0;
     filter.gain.setTargetAtTime(gain, context.currentTime, 0.015);
   });
+  if (shortLoopGainNode) {
+    const linearGain = Math.pow(10, ((currentEqGains[4] ?? 0) + (currentEqGains[5] ?? 0)) / 40);
+    shortLoopGainNode.gain.setTargetAtTime(linearGain, context.currentTime, 0.015);
+  }
 }
 
 async function applyEqPreset(presetKey) {
@@ -342,7 +356,7 @@ function stepPlaybackRate(delta) {
 }
 
 function updatePlayPauseButton() {
-  const paused = video.paused || video.ended;
+  const paused = shortLoopPlayback.active ? false : (video.paused || video.ended);
   playPauseIcon.innerHTML = paused
     ? '<path d="M4.5 3.5L11.5 8L4.5 12.5V3.5Z" fill="currentColor"></path>'
     : '<rect x="4.5" y="3.5" width="2.5" height="9" fill="currentColor"></rect><rect x="9" y="3.5" width="2.5" height="9" fill="currentColor"></rect>';
@@ -357,6 +371,14 @@ function syncMediaMode(file) {
 
 function isLoopActive() {
   return loopState.enabledA && loopState.enabledB && loopState.end > loopState.start;
+}
+
+function getLoopDuration() {
+  return isLoopActive() ? Math.max(0, loopState.end - loopState.start) : 0;
+}
+
+function shouldUseShortAudioLoop() {
+  return Boolean(decodedAudioBuffer && isLoopActive() && getLoopDuration() > 0 && getLoopDuration() <= 0.3);
 }
 
 function updateLoopButtons() {
@@ -927,6 +949,7 @@ async function buildWaveformFromFile(file, jobId) {
 
   pushPipelineDebug('buildWaveformFromFile:decodeAudioData:start');
   const audioBuffer = await context.decodeAudioData(audioSourceBuffer.slice(0));
+  decodedAudioBuffer = audioBuffer;
   pushPipelineDebug('buildWaveformFromFile:decodeAudioData:done', `channels=${audioBuffer.numberOfChannels} duration=${audioBuffer.duration.toFixed(2)}`);
   if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
 
@@ -989,8 +1012,81 @@ async function loadFile(file) {
   }
 }
 
+function stopShortAudioLoop() {
+  if (shortLoopSourceNode) {
+    try {
+      shortLoopSourceNode.stop();
+    } catch (error) {
+      // ignore stop race
+    }
+    try {
+      shortLoopSourceNode.disconnect();
+    } catch (error) {
+      // ignore disconnect race
+    }
+    shortLoopSourceNode = null;
+  }
+  if (shortLoopGainNode) {
+    try {
+      shortLoopGainNode.disconnect();
+    } catch (error) {
+      // ignore disconnect race
+    }
+    shortLoopGainNode = null;
+  }
+  shortLoopPlayback.active = false;
+}
+
+async function startShortAudioLoop() {
+  if (!shouldUseShortAudioLoop()) return false;
+  const context = await ensureAudioContext();
+  if (context.state === 'suspended') {
+    await context.resume();
+  }
+
+  stopShortAudioLoop();
+  video.pause();
+  forceSeekToLoopStart('short-loop-start');
+
+  const source = context.createBufferSource();
+  source.buffer = decodedAudioBuffer;
+  source.loop = true;
+  source.loopStart = loopState.start;
+  source.loopEnd = loopState.end;
+
+  const gainNode = context.createGain();
+  gainNode.gain.value = 1;
+  source.connect(gainNode);
+  gainNode.connect(context.destination);
+
+  const offset = Math.max(0, Math.min(loopState.start, decodedAudioBuffer.duration));
+  source.start(0, offset);
+  shortLoopSourceNode = source;
+  shortLoopGainNode = gainNode;
+  shortLoopPlayback = {
+    active: true,
+    start: loopState.start,
+    end: loopState.end,
+    startedAtContextTime: context.currentTime,
+    offsetAtStart: offset,
+  };
+  syncEqFiltersToCurrentGains();
+  source.onended = () => {
+    if (shortLoopSourceNode === source) {
+      stopShortAudioLoop();
+      updatePlayPauseButton();
+      updateTimeline(true);
+    }
+  };
+  updatePlayPauseButton();
+  setStatus(`Short audio loop ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+  startPlaybackAnimation();
+  return true;
+}
+
 function stopToStart() {
   if (!currentFile || !video.src) return;
+  stopShortAudioLoop();
   video.pause();
   video.currentTime = 0;
   waveViewport.scrollLeft = 0;
@@ -1000,7 +1096,9 @@ function stopToStart() {
 }
 
 function clearCurrentFile() {
+  stopShortAudioLoop();
   stopPlaybackAnimation();
+  decodedAudioBuffer = null;
   currentJobId += 1;
   currentFile = null;
   viewerCard.classList.remove('audio-mode');
@@ -1029,8 +1127,10 @@ function clearCurrentFile() {
 }
 
 function updateTimeline(forceText = false) {
-  const duration = video.duration || 0;
-  const currentTime = video.currentTime || 0;
+  const duration = video.duration || decodedAudioBuffer?.duration || 0;
+  const currentTime = shortLoopPlayback.active
+    ? (shortLoopPlayback.start + (((audioContext?.currentTime || 0) - shortLoopPlayback.startedAtContextTime) % Math.max(0.001, shortLoopPlayback.end - shortLoopPlayback.start)))
+    : (video.currentTime || 0);
   const currentWholeSecond = Math.floor(currentTime);
 
   if (forceText || currentWholeSecond !== lastTimelineTextSecond) {
@@ -1065,6 +1165,12 @@ function stopPlaybackAnimation() {
 }
 
 function playbackAnimationLoop() {
+  if (shortLoopPlayback.active) {
+    updateTimeline();
+    rafId = requestAnimationFrame(playbackAnimationLoop);
+    return;
+  }
+
   if (!video.paused && !video.ended) {
     enforceLoopPlayback();
     updateTimeline();
@@ -1480,13 +1586,27 @@ function setLoopPointB() {
   setStatus(describeLoopState());
 }
 
-function togglePlayPause() {
+async function togglePlayPause() {
   if (!currentFile || !video.src) {
     pushPipelineDebug('playback:toggle:ignored', 'no current file');
     return;
   }
-  pushPipelineDebug('playback:toggle', `paused=${video.paused} ended=${video.ended} current=${video.currentTime.toFixed(3)} loop=${isLoopActive()}`);
+  pushPipelineDebug('playback:toggle', `paused=${video.paused} ended=${video.ended} current=${video.currentTime.toFixed(3)} loop=${isLoopActive()} short=${shouldUseShortAudioLoop()}`);
+
+  if (shortLoopPlayback.active) {
+    stopShortAudioLoop();
+    stopPlaybackAnimation();
+    updatePlayPauseButton();
+    setStatus('Paused');
+    updateTimeline(true);
+    return;
+  }
+
   if (video.paused || video.ended) {
+    if (shouldUseShortAudioLoop()) {
+      await startShortAudioLoop();
+      return;
+    }
     if (isLoopActive() && (video.currentTime < loopState.start || video.currentTime >= loopState.end)) {
       forceSeekToLoopStart('toggle-play');
     }
@@ -1679,9 +1799,11 @@ waveViewport.addEventListener('pointerdown', (event) => {
     return;
   }
 
-  let handle = getWaveformHandleHit(event);
-  if (!handle && isLoopActive()) {
+  let handle = null;
+  if (isLoopActive()) {
     handle = getWaveformHandleHit(event, { allowNearest: true });
+  } else {
+    handle = getWaveformHandleHit(event);
   }
   if (handle) {
     waveformHandleDrag.pendingHandle = handle;
