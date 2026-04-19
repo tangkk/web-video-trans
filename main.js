@@ -105,6 +105,7 @@ let waveformCursorDrag = {
   pointerId: null,
   idleTimer: null,
   continuousPlay: false,
+  holdScrubTimer: null,
 };
 let scrubPreviewSourceNode = null;
 let lastScrubPreviewAt = 0;
@@ -1813,6 +1814,13 @@ function clearWaveformCursorIdleTimer() {
   }
 }
 
+function clearWaveformCursorHoldScrubTimer() {
+  if (waveformCursorDrag.holdScrubTimer !== null) {
+    clearInterval(waveformCursorDrag.holdScrubTimer);
+    waveformCursorDrag.holdScrubTimer = null;
+  }
+}
+
 function stopScrubPreview() {
   if (!scrubPreviewSourceNode) return;
   try {
@@ -1825,25 +1833,23 @@ function stopScrubPreview() {
 }
 
 function stopCursorContinuousPlayback() {
-  if (!waveformCursorDrag.continuousPlay) return;
   waveformCursorDrag.continuousPlay = false;
   video.pause();
 }
 
-function armCursorContinuousPlayback() {
+function armCursorHoldScrub() {
   clearWaveformCursorIdleTimer();
-  waveformCursorDrag.idleTimer = window.setTimeout(() => {
+  clearWaveformCursorHoldScrubTimer();
+  waveformCursorDrag.holdScrubTimer = window.setInterval(() => {
     if (!waveformCursorDrag.active) return;
-    waveformCursorDrag.continuousPlay = true;
-    stopScrubPreview();
-    const playResult = video.play();
-    if (playResult && typeof playResult.then === 'function') {
-      playResult.catch((error) => {
-        pushPipelineDebug('waveform:cursor:continuous-play:error', error?.message || String(error));
-      });
-    }
-    setStatus(`Playing from ${formatTime(video.currentTime)}`);
-  }, 90);
+    playScrubPreviewAt(video.currentTime).catch((error) => {
+      pushPipelineDebug('waveform:cursor:hold-scrub:error', error?.message || String(error));
+    });
+  }, 20);
+}
+
+function armCursorContinuousPlayback() {
+  // Keep cursor drag in scrub mode until pointerup.
 }
 
 async function playScrubPreviewAt(timeSeconds) {
@@ -1991,6 +1997,7 @@ function resetWaveformPointerGesture() {
   waveformCursorDrag.pointerId = null;
   waveformCursorDrag.continuousPlay = false;
   clearWaveformCursorIdleTimer();
+  clearWaveformCursorHoldScrubTimer();
   isWaveViewportPanning = false;
   syncWaveViewportTouchAction();
   clearWaveformLongPressTimer();
@@ -2495,6 +2502,7 @@ waveViewport.addEventListener('pointerdown', (event) => {
     waveformCursorDrag.pointerId = event.pointerId;
     waveformCursorDrag.continuousPlay = false;
     clearWaveformCursorIdleTimer();
+    clearWaveformCursorHoldScrubTimer();
     stopShortAudioLoop();
     video.pause();
     try {
@@ -2507,7 +2515,7 @@ waveViewport.addEventListener('pointerdown', (event) => {
     playScrubPreviewAt(video.currentTime).catch((error) => {
       pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
     });
-    armCursorContinuousPlayback();
+    armCursorHoldScrub();
     setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
     return;
   }
@@ -2556,14 +2564,11 @@ waveViewport.addEventListener('pointermove', (event) => {
   waveViewport.classList.toggle('cursor-scrub-hover', !waveformHandleDrag.active && !waveformCursorDrag.active && nearCursor);
 
   if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId) {
-    if (waveformCursorDrag.continuousPlay) {
-      stopCursorContinuousPlayback();
-    }
     handleSeekFromViewportPointer(event);
     playScrubPreviewAt(video.currentTime).catch((error) => {
       pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
     });
-    armCursorContinuousPlayback();
+    armCursorHoldScrub();
     drawWaveform(video.duration ? video.currentTime / video.duration : 0);
     setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
     return;
@@ -2620,6 +2625,7 @@ window.addEventListener('pointerup', (event) => {
     waveformCursorDrag.active = false;
     waveformCursorDrag.pointerId = null;
     clearWaveformCursorIdleTimer();
+    clearWaveformCursorHoldScrubTimer();
     waveViewport.classList.remove('cursor-scrub-hover');
     stopCursorContinuousPlayback();
     stopScrubPreview();
@@ -2647,6 +2653,7 @@ window.addEventListener('pointercancel', (event) => {
     waveformCursorDrag.active = false;
     waveformCursorDrag.pointerId = null;
     clearWaveformCursorIdleTimer();
+    clearWaveformCursorHoldScrubTimer();
     waveViewport.classList.remove('cursor-scrub-hover');
     stopCursorContinuousPlayback();
     stopScrubPreview();
