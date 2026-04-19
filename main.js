@@ -48,6 +48,7 @@ const transcribeBody = document.getElementById('transcribeBody');
 const transcribeBadge = document.getElementById('transcribeBadge');
 const transcribeBtn = document.getElementById('transcribeBtn');
 const transcribeMeta = document.getElementById('transcribeMeta');
+const transcribeViewModeSelect = document.getElementById('transcribeViewMode');
 const transcribeScrollBar = document.getElementById('transcribeScrollBar');
 const transcribeHoverLabel = document.getElementById('transcribeHoverLabel');
 
@@ -148,6 +149,7 @@ let activeTranscribePointerId = null;
 let transcribeView = {
   minPitch: 48,
   maxPitch: 84,
+  mode: 'focus',
 };
 let transcribeState = {
   status: 'idle',
@@ -370,10 +372,11 @@ function resizeTranscribeCanvas() {
   const dpr = window.devicePixelRatio || 1;
   const cssHeight = 260;
   const viewportCssWidth = transcribeViewport?.clientWidth || transcribeCanvas.clientWidth || 640;
-  const duration = Math.max(0, transcribeResult?.duration || getLoopSpanSeconds() || 0);
+  const hasResult = Boolean(transcribeResult);
+  const duration = hasResult ? Math.max(0, transcribeResult.duration || 0) : 0;
   const visibleSeconds = 10;
   const pixelsPerSecond = viewportCssWidth / visibleSeconds;
-  const targetCssWidth = duration > visibleSeconds
+  const targetCssWidth = hasResult && duration > visibleSeconds
     ? Math.max(viewportCssWidth, Math.ceil(duration * pixelsPerSecond))
     : viewportCssWidth;
   const width = Math.max(480, Math.floor(targetCssWidth * dpr));
@@ -386,7 +389,12 @@ function resizeTranscribeCanvas() {
     transcribeCanvas.height = height;
   }
 
-  requestAnimationFrame(syncTranscribeScrollbar);
+  requestAnimationFrame(() => {
+    if (!hasResult && transcribeViewport) {
+      transcribeViewport.scrollLeft = 0;
+    }
+    syncTranscribeScrollbar();
+  });
 }
 
 function syncTranscribeScrollbar() {
@@ -409,17 +417,42 @@ function getTranscriptionMetrics() {
   return { width, height, padLeft, padRight, padTop, padBottom, innerWidth, innerHeight };
 }
 
+function getRobustTranscribePitchRange(notes) {
+  if (!notes?.length) return { minPitch: 48, maxPitch: 84 };
+
+  const weightedPitches = [];
+  notes.forEach((note) => {
+    const weight = Math.max(1, Math.round(Math.max(0.04, note.durationSeconds || 0.04) * 20 * Math.max(0.35, note.amplitude ?? 0.6)));
+    for (let i = 0; i < weight; i += 1) weightedPitches.push(note.pitchMidi);
+  });
+
+  weightedPitches.sort((a, b) => a - b);
+  const source = weightedPitches.length ? weightedPitches : notes.map((note) => note.pitchMidi).sort((a, b) => a - b);
+  const quantile = (q) => source[Math.max(0, Math.min(source.length - 1, Math.floor((source.length - 1) * q)))];
+
+  let minPitch = quantile(0.08);
+  let maxPitch = quantile(0.92);
+
+  if (!Number.isFinite(minPitch) || !Number.isFinite(maxPitch) || minPitch >= maxPitch) {
+    minPitch = Math.min(...notes.map((note) => note.pitchMidi));
+    maxPitch = Math.max(...notes.map((note) => note.pitchMidi));
+  }
+
+  return { minPitch, maxPitch };
+}
+
 function syncTranscribeViewToResult() {
   if (!transcribeResult?.notes?.length) {
     transcribeView.minPitch = 48;
     transcribeView.maxPitch = 84;
     return;
   }
-  const minPitch = Math.min(...transcribeResult.notes.map((note) => note.pitchMidi));
-  const maxPitch = Math.max(...transcribeResult.notes.map((note) => note.pitchMidi));
-  const MAX_VISIBLE_SEMITONES = 24;
-  const contentSpan = Math.max(12, maxPitch - minPitch + 1);
-  const visibleSpan = Math.min(MAX_VISIBLE_SEMITONES, Math.max(12, contentSpan + 4));
+
+  const { minPitch, maxPitch } = getRobustTranscribePitchRange(transcribeResult.notes);
+  const mode = transcribeView.mode || 'focus';
+  const visibleSpan = mode === 'two-octave'
+    ? 24
+    : Math.min(36, Math.max(12, maxPitch - minPitch + 5));
   const centerPitch = (minPitch + maxPitch) / 2;
   let nextMin = Math.round(centerPitch - visibleSpan / 2);
   let nextMax = nextMin + visibleSpan;
@@ -602,12 +635,14 @@ function drawTranscriptionRoll() {
   transcribeCtx.strokeRect(padLeft, padTop, innerWidth, innerHeight);
 
   if (!transcribeResult) {
-    transcribeCtx.fillStyle = '#777777';
-    transcribeCtx.font = `${Math.max(12, width * 0.015)}px Inter, sans-serif`;
-    transcribeCtx.textAlign = 'center';
-    transcribeCtx.textBaseline = 'middle';
-    transcribeCtx.fillText('No transcription yet', width / 2, height / 2);
+    if (transcribeViewModeSelect) {
+      transcribeViewModeSelect.value = transcribeView.mode || 'focus';
+    }
     return;
+  }
+
+  if (transcribeViewModeSelect) {
+    transcribeViewModeSelect.value = transcribeView.mode || 'focus';
   }
 
   const notes = transcribeResult.notes || [];
@@ -2445,6 +2480,15 @@ if (transcribeBtn) {
   transcribeBtn.addEventListener('click', runTranscription);
 }
 
+if (transcribeViewModeSelect) {
+  transcribeViewModeSelect.value = transcribeView.mode;
+  transcribeViewModeSelect.addEventListener('change', () => {
+    transcribeView.mode = transcribeViewModeSelect.value || 'focus';
+    syncTranscribeViewToResult();
+    drawTranscriptionRoll();
+  });
+}
+
 if (eqGraphCanvas) {
   eqGraphCanvas.addEventListener('pointerdown', (event) => {
     activeEqBandIndex = null;
@@ -2944,7 +2988,7 @@ if (transcribeCanvas) {
     event.preventDefault();
     const direction = Math.sign(event.deltaY) || 1;
     const step = event.shiftKey ? 12 : 3;
-    const span = Math.min(24, Math.max(12, transcribeView.maxPitch - transcribeView.minPitch));
+    const span = Math.max(12, transcribeView.maxPitch - transcribeView.minPitch);
     let nextMin = transcribeView.minPitch + direction * step;
     let nextMax = nextMin + span;
     if (nextMin < 21) {

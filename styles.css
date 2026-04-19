@@ -520,6 +520,25 @@ video.ready {
   flex-wrap: wrap;
 }
 
+.transcribe-mode-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.transcribe-mode-select {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .transcribe-meta {
   color: var(--muted);
   font-size: 12px;

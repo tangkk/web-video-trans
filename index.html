@@ -111,6 +111,13 @@
                 <p class="transcribe-note">Turn the current A-B loop into a piano-roll note view. Best on one dominant instrument. Max 30s.</p>
                 <div class="transcribe-toolbar">
                   <button id="transcribeBtn" class="file-btn transcribe-btn" type="button">Transcribe A-B</button>
+                  <label class="transcribe-mode-control" for="transcribeViewMode">
+                    <span>Mode</span>
+                    <select id="transcribeViewMode" class="transcribe-mode-select">
+                      <option value="focus">Focus</option>
+                      <option value="two-octave">2 octave</option>
+                    </select>
+                  </label>
                   <span id="transcribeMeta" class="transcribe-meta">Set an A-B loop first.</span>
                 </div>
               </div>
