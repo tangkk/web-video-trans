@@ -1,15 +1,18 @@
 # web-video-trans
 
+**web-video-trans** is a lightweight, local-first, open-source tool for music listening, waveform inspection, and transcription directly in the browser. You can use it right now at **https://tangkk.github.io/web-video-trans/**, and the full source code is openly available at **https://github.com/tangkk/web-video-trans**. If you want a practical ear-training and transcription helper that stays transparent, hackable, and fully open source, this is exactly that.
+
 A local-first web app for carefully listening to, inspecting, and transcribing music from video or audio files.
 
 ## What this app is for
 
 This tool is mainly designed for **music transcription** work:
 
-- slowing down a performance without changing workflow complexity too much
+- slowing down a performance without making the workflow heavy
 - zooming into the waveform to inspect short phrases, attacks, and note boundaries
 - looping small sections with A/B markers
 - using EQ presets (and manual EQ shaping) to bring out instruments or voices you want to hear more clearly
+- turning the current A/B loop into a piano-roll-style transcription view
 - working from local video/audio files directly in the browser, without uploading them anywhere
 
 Typical use cases:
@@ -31,6 +34,20 @@ Typical use cases:
   - preset EQ targets such as Guitar, Bass, Saxophone, Piano, Vocal, Trumpet, Drums
   - draggable EQ points for manual shaping
 - **Video + audio support**: load common local media formats directly
+- **A/B transcription panel**:
+  - transcribe the current A/B loop into a piano-roll note view
+  - horizontal scrolling for longer windows, with cursor-following playback
+  - visible custom horizontal scrollbar for navigation
+  - hover note labels directly on notes
+  - focus mode for a robust pitch-range view with outlier suppression
+  - fixed **2 octave** mode for a stable compact pitch view
+- **Interactive piano roll**:
+  - hover notes to inspect pitch names
+  - press / drag on notes or the pitch axis to preview pitches
+  - mouse wheel pitch-range browsing without losing the current mode
+- **Waveform interaction improvements**:
+  - A/B marker dragging has priority when the pointer is actually on A or B
+  - scrub remains available when not directly hitting A/B markers
 
 ## Why it is useful for transcription
 
@@ -42,6 +59,7 @@ This app helps with that by combining:
 - waveform-guided navigation
 - playback speed adjustment
 - spectral emphasis via EQ
+- loop-based transcription visualization
 
 That combination makes it easier to:
 
@@ -49,6 +67,7 @@ That combination makes it easier to:
 - hear inner parts in a mix
 - compare repeated phrases
 - confirm articulation, rhythm, and pitch movement
+- spot note distribution visually inside a short loop
 
 ## Workflow suggestion
 
@@ -61,13 +80,17 @@ A practical transcription workflow in this app:
 5. Apply an EQ preset that highlights the target instrument
 6. Fine-tune the EQ by dragging the graphic EQ points
 7. Zoom into the waveform for more accurate seeking
-8. Repeat until the phrase is clear enough to write down
+8. Run **Transcribe A-B** to generate the piano roll
+9. Use **Focus** or **2 octave** mode depending on whether you want adaptive range or a fixed compact range
+10. Hover notes to inspect pitch names and keep looping until the phrase is clear enough to write down
 
 ## Notes
 
 - The app is meant for **careful listening and transcription**, not full DAW-style production.
 - EQ presets are heuristic listening aids, not mixing presets.
-- Results depend on the source audio and arrangement density.
+- The transcription view is designed as a practical listening aid, not a perfect symbolic transcription engine.
+- Results depend on the source audio, arrangement density, and instrument clarity.
+- Short, relatively clean, single-instrument passages usually work best.
 
 ## Local development
 
@@ -89,3 +112,10 @@ Then open:
 ```text
 http://<your-mac-lan-ip>:5173/web-video-trans/
 ```
+
+## Open source
+
+This project is open source.
+
+- Live demo: https://tangkk.github.io/web-video-trans/
+- Source code: https://github.com/tangkk/web-video-trans
