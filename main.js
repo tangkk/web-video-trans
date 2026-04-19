@@ -745,6 +745,25 @@ function maybeUpdateProgressFromLog(message) {
   });
 }
 
+async function fetchWithTiming(url, label) {
+  const startedAt = performance.now();
+  pushPipelineDebug(`${label}:fetch:start`, url);
+  const response = await fetch(url, { cache: 'default' });
+  const headersReceivedAt = performance.now();
+  pushPipelineDebug(`${label}:fetch:headers`, `status=${response.status} type=${response.type} ${(headersReceivedAt - startedAt).toFixed(0)}ms`);
+  const buffer = await response.arrayBuffer();
+  const endedAt = performance.now();
+  const bytes = buffer.byteLength;
+  const mb = (bytes / (1024 * 1024)).toFixed(2);
+  pushPipelineDebug(`${label}:fetch:done`, `${mb}MB ${(endedAt - startedAt).toFixed(0)}ms`);
+  return {
+    buffer,
+    mimeType: response.headers.get('content-type') || undefined,
+    elapsedMs: endedAt - startedAt,
+    bytes,
+  };
+}
+
 async function ensureFFmpegLoaded() {
   pushPipelineDebug('ensureFFmpegLoaded:start', `loaded=${Boolean(ffmpeg?.loaded)} pending=${Boolean(ffmpegLoadPromise)}`);
   if (ffmpeg?.loaded) {
@@ -770,13 +789,35 @@ async function ensureFFmpegLoaded() {
       hint: 'The first run is usually the slowest.',
     });
 
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    pushPipelineDebug('ffmpeg:env', `ua=${navigator.userAgent}`);
+    if (connection) {
+      pushPipelineDebug('ffmpeg:network', `effectiveType=${connection.effectiveType || 'n/a'} downlink=${connection.downlink || 'n/a'} rtt=${connection.rtt || 'n/a'} saveData=${connection.saveData || false}`);
+    }
+
     const coreURL = new URL('./src/vendor/ffmpeg-core/ffmpeg-core.js', import.meta.url).href;
-    pushPipelineDebug('ensureFFmpegLoaded:core-url-ready');
-    updateProcessing({ percent: 12, detail: 'FFmpeg JS core loaded. Preparing WASM…' });
     const wasmURL = new URL('./src/vendor/ffmpeg-core/ffmpeg-core.wasm', import.meta.url).href;
+    pushPipelineDebug('ensureFFmpegLoaded:core-url-ready');
     pushPipelineDebug('ensureFFmpegLoaded:wasm-url-ready');
-    updateProcessing({ percent: 20, detail: 'FFmpeg WASM located locally. Initializing…' });
-    await ffmpeg.load({ coreURL, wasmURL });
+
+    updateProcessing({ percent: 10, detail: 'Fetching FFmpeg JS core…' });
+    const coreFetch = await fetchWithTiming(coreURL, 'ffmpeg-core.js');
+    const blobCoreURL = URL.createObjectURL(new Blob([coreFetch.buffer], { type: coreFetch.mimeType || 'text/javascript' }));
+
+    updateProcessing({ percent: 16, detail: 'Fetching FFmpeg WASM…' });
+    const wasmFetch = await fetchWithTiming(wasmURL, 'ffmpeg-core.wasm');
+    const blobWasmURL = URL.createObjectURL(new Blob([wasmFetch.buffer], { type: wasmFetch.mimeType || 'application/wasm' }));
+
+    updateProcessing({ percent: 20, detail: 'FFmpeg assets fetched. Initializing WASM…' });
+    const loadStartedAt = performance.now();
+    pushPipelineDebug('ffmpeg.load:start');
+    try {
+      await ffmpeg.load({ coreURL: blobCoreURL, wasmURL: blobWasmURL });
+    } finally {
+      URL.revokeObjectURL(blobCoreURL);
+      URL.revokeObjectURL(blobWasmURL);
+    }
+    pushPipelineDebug('ffmpeg.load:done', `${(performance.now() - loadStartedAt).toFixed(0)}ms`);
     pushPipelineDebug('ensureFFmpegLoaded:loaded');
     updateProcessing({ percent: 25, detail: 'FFmpeg is ready.' });
     return ffmpeg;
