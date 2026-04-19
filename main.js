@@ -397,9 +397,24 @@ function syncTranscribeViewToResult() {
   }
   const minPitch = Math.min(...transcribeResult.notes.map((note) => note.pitchMidi));
   const maxPitch = Math.max(...transcribeResult.notes.map((note) => note.pitchMidi));
-  const span = Math.max(12, maxPitch - minPitch + 5);
-  transcribeView.minPitch = Math.max(21, minPitch - 2);
-  transcribeView.maxPitch = Math.min(108, transcribeView.minPitch + span);
+  const MAX_VISIBLE_SEMITONES = 24;
+  const contentSpan = Math.max(12, maxPitch - minPitch + 1);
+  const visibleSpan = Math.min(MAX_VISIBLE_SEMITONES, Math.max(12, contentSpan + 4));
+  const centerPitch = (minPitch + maxPitch) / 2;
+  let nextMin = Math.round(centerPitch - visibleSpan / 2);
+  let nextMax = nextMin + visibleSpan;
+
+  if (nextMin < 21) {
+    nextMin = 21;
+    nextMax = nextMin + visibleSpan;
+  }
+  if (nextMax > 108) {
+    nextMax = 108;
+    nextMin = nextMax - visibleSpan;
+  }
+
+  transcribeView.minPitch = Math.max(21, nextMin);
+  transcribeView.maxPitch = Math.min(108, nextMax);
 }
 
 function getTranscribeCursorSeconds() {
@@ -2817,7 +2832,7 @@ if (transcribeCanvas) {
     event.preventDefault();
     const direction = Math.sign(event.deltaY) || 1;
     const step = event.shiftKey ? 12 : 3;
-    const span = transcribeView.maxPitch - transcribeView.minPitch;
+    const span = Math.min(24, Math.max(12, transcribeView.maxPitch - transcribeView.minPitch));
     let nextMin = transcribeView.minPitch + direction * step;
     let nextMax = nextMin + span;
     if (nextMin < 21) {
