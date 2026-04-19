@@ -405,6 +405,23 @@ video.ready {
   scrollbar-gutter: stable both-edges;
 }
 
+.wave-viewport.cursor-scrub-hover {
+  cursor: ew-resize;
+}
+
+.wave-viewport.cursor-scrub-hover::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  left: calc(var(--cursor-x, 0px) - 10px - var(--scroll-left, 0px));
+  background: rgba(217, 72, 39, 0.08);
+  border-left: 1px solid rgba(217, 72, 39, 0.28);
+  border-right: 1px solid rgba(217, 72, 39, 0.28);
+  pointer-events: none;
+}
+
 #waveCanvas {
   height: 160px;
   display: block;

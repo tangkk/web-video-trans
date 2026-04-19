@@ -100,6 +100,15 @@ let waveformHandleDrag = {
   handle: null,
   pendingHandle: null,
 };
+let waveformCursorDrag = {
+  active: false,
+  pointerId: null,
+  idleTimer: null,
+  continuousPlay: false,
+};
+let scrubPreviewSourceNode = null;
+let lastScrubPreviewAt = 0;
+let lastScrubPreviewTime = -1;
 let isWaveViewportPanning = false;
 let waveformHoveredHandle = null;
 let lastPlayheadX = 0;
@@ -1074,6 +1083,8 @@ function getDisplayPeaks(targetCount) {
 
 function drawWaveform(progress = video.duration ? video.currentTime / video.duration : 0) {
   progress = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
+  waveViewport.style.setProperty('--cursor-x', `${lastPlayheadCssX}px`);
+  waveViewport.style.setProperty('--scroll-left', `${waveViewport.scrollLeft}px`);
   resizeCanvasForDisplay();
 
   const width = waveCanvas.width;
@@ -1786,6 +1797,92 @@ function handleSeekFromViewportPointer(event) {
   handleSeekByRatio(ratio);
 }
 
+function isNearWaveformCursor(event, thresholdPx = 16) {
+  if (!video.duration || !Number.isFinite(video.duration)) return false;
+  const rect = waveCanvas.getBoundingClientRect();
+  const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || rect.width;
+  if (!canvasCssWidth) return false;
+  const absolutePointerX = waveViewport.scrollLeft + (event.clientX - rect.left);
+  return Math.abs(absolutePointerX - lastPlayheadCssX) <= thresholdPx;
+}
+
+function clearWaveformCursorIdleTimer() {
+  if (waveformCursorDrag.idleTimer !== null) {
+    clearTimeout(waveformCursorDrag.idleTimer);
+    waveformCursorDrag.idleTimer = null;
+  }
+}
+
+function stopScrubPreview() {
+  if (!scrubPreviewSourceNode) return;
+  try {
+    scrubPreviewSourceNode.stop();
+  } catch (error) {}
+  try {
+    scrubPreviewSourceNode.disconnect();
+  } catch (error) {}
+  scrubPreviewSourceNode = null;
+}
+
+function stopCursorContinuousPlayback() {
+  if (!waveformCursorDrag.continuousPlay) return;
+  waveformCursorDrag.continuousPlay = false;
+  video.pause();
+}
+
+function armCursorContinuousPlayback() {
+  clearWaveformCursorIdleTimer();
+  waveformCursorDrag.idleTimer = window.setTimeout(() => {
+    if (!waveformCursorDrag.active) return;
+    waveformCursorDrag.continuousPlay = true;
+    stopScrubPreview();
+    const playResult = video.play();
+    if (playResult && typeof playResult.then === 'function') {
+      playResult.catch((error) => {
+        pushPipelineDebug('waveform:cursor:continuous-play:error', error?.message || String(error));
+      });
+    }
+    setStatus(`Playing from ${formatTime(video.currentTime)}`);
+  }, 90);
+}
+
+async function playScrubPreviewAt(timeSeconds) {
+  if (!decodedAudioBuffer) return;
+  const now = performance.now();
+  if (now - lastScrubPreviewAt < 42 && Math.abs(timeSeconds - lastScrubPreviewTime) < 0.025) {
+    return;
+  }
+  lastScrubPreviewAt = now;
+  lastScrubPreviewTime = timeSeconds;
+
+  const context = await ensureAudioContext();
+  if (context.state === 'suspended') {
+    await context.resume();
+  }
+
+  stopScrubPreview();
+  const source = context.createBufferSource();
+  const gain = context.createGain();
+  source.buffer = decodedAudioBuffer;
+  source.playbackRate.value = 1;
+  gain.gain.setValueAtTime(0.0001, context.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.4, context.currentTime + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.26, context.currentTime + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.14);
+  source.connect(gain);
+  gain.connect(context.destination);
+  const previewDuration = 0.14;
+  const safeTime = Math.max(0, Math.min(decodedAudioBuffer.duration - previewDuration - 0.01, timeSeconds));
+  source.start(context.currentTime, safeTime, previewDuration);
+  source.stop(context.currentTime + 0.16);
+  scrubPreviewSourceNode = source;
+  source.onended = () => {
+    if (scrubPreviewSourceNode === source) {
+      scrubPreviewSourceNode = null;
+    }
+  };
+}
+
 function clearWaveformLongPressTimer() {
   if (waveformLongPressTimer !== null) {
     pushPipelineDebug('waveform:longpress-timer:clear');
@@ -1890,11 +1987,16 @@ function resetWaveformPointerGesture() {
   waveformHandleDrag.active = false;
   waveformHandleDrag.handle = null;
   waveformHandleDrag.pendingHandle = null;
+  waveformCursorDrag.active = false;
+  waveformCursorDrag.pointerId = null;
+  waveformCursorDrag.continuousPlay = false;
+  clearWaveformCursorIdleTimer();
   isWaveViewportPanning = false;
   syncWaveViewportTouchAction();
   clearWaveformLongPressTimer();
   waveformPointerGesture = null;
   isPointerSeekingWaveform = false;
+  stopScrubPreview();
 }
 
 function shouldUseDeferredWaveformSeek(event) {
@@ -2388,6 +2490,28 @@ waveViewport.addEventListener('pointerdown', (event) => {
     return;
   }
 
+  if (event.pointerType === 'mouse' && isNearWaveformCursor(event, 12)) {
+    waveformCursorDrag.active = true;
+    waveformCursorDrag.pointerId = event.pointerId;
+    waveformCursorDrag.continuousPlay = false;
+    clearWaveformCursorIdleTimer();
+    stopShortAudioLoop();
+    video.pause();
+    try {
+      waveViewport.setPointerCapture(event.pointerId);
+    } catch (error) {
+      pushPipelineDebug('waveform:cursor:pointercapture:set:error', error?.message || String(error));
+    }
+    pushPipelineDebug('waveform:cursor:drag:start', `pointer=${event.pointerType} id=${event.pointerId}`);
+    handleSeekFromViewportPointer(event);
+    playScrubPreviewAt(video.currentTime).catch((error) => {
+      pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
+    });
+    armCursorContinuousPlayback();
+    setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
+    return;
+  }
+
   let handle = null;
   if (isLoopActive()) {
     handle = getWaveformHandleHit(event, { allowNearest: true });
@@ -2427,7 +2551,24 @@ waveViewport.addEventListener('pointerdown', (event) => {
 });
 
 waveViewport.addEventListener('pointermove', (event) => {
+  const nearCursor = isNearWaveformCursor(event, 16);
   updateViewportCursorVisibility(event);
+  waveViewport.classList.toggle('cursor-scrub-hover', !waveformHandleDrag.active && !waveformCursorDrag.active && nearCursor);
+
+  if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId) {
+    if (waveformCursorDrag.continuousPlay) {
+      stopCursorContinuousPlayback();
+    }
+    handleSeekFromViewportPointer(event);
+    playScrubPreviewAt(video.currentTime).catch((error) => {
+      pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
+    });
+    armCursorContinuousPlayback();
+    drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+    setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
+    return;
+  }
+
   updateWaveformPointerGesture(event);
 
   if (waveformHandleDrag.active && video.duration && Number.isFinite(video.duration)) {
@@ -2474,6 +2615,18 @@ waveViewport.addEventListener('contextmenu', (event) => {
 
 window.addEventListener('pointerup', (event) => {
   pushPipelineDebug('window:pointerup', `pointer=${event.pointerType} id=${event.pointerId}`);
+  if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId) {
+    pushPipelineDebug('waveform:cursor:drag:end', `id=${event.pointerId} time=${video.currentTime.toFixed(3)}`);
+    waveformCursorDrag.active = false;
+    waveformCursorDrag.pointerId = null;
+    clearWaveformCursorIdleTimer();
+    waveViewport.classList.remove('cursor-scrub-hover');
+    stopCursorContinuousPlayback();
+    stopScrubPreview();
+    drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+    setStatus(`Paused at ${formatTime(video.currentTime)}`);
+    return;
+  }
   if (finishWaveformHandleDrag(event)) {
     if (waveformPointerGesture && waveformPointerGesture.pointerId === event.pointerId) {
       stopWaveformLongPressPreview();
@@ -2490,6 +2643,15 @@ window.addEventListener('pointerup', (event) => {
 
 window.addEventListener('pointercancel', (event) => {
   pushPipelineDebug('window:pointercancel', `pointer=${event.pointerType} id=${event.pointerId}`);
+  if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId) {
+    waveformCursorDrag.active = false;
+    waveformCursorDrag.pointerId = null;
+    clearWaveformCursorIdleTimer();
+    waveViewport.classList.remove('cursor-scrub-hover');
+    stopCursorContinuousPlayback();
+    stopScrubPreview();
+    return;
+  }
   if (waveformPointerGesture && waveformPointerGesture.pointerId === event.pointerId) {
     stopWaveformLongPressPreview();
     resetWaveformPointerGesture();
