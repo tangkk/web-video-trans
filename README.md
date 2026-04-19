@@ -1,96 +1,144 @@
 # web-video-trans
 
-**web-video-trans** is a lightweight, local-first, open-source tool for music listening, waveform inspection, and transcription directly in the browser. You can use it right now at **https://tangkk.github.io/web-video-trans/**, and the full source code is openly available at **https://github.com/tangkk/web-video-trans**. If you want a practical ear-training and transcription helper that stays transparent, hackable, and fully open source, this is exactly that.
+A lightweight, local-first, open-source tool for listening, looping, inspecting, and transcribing music from video or audio — directly in the browser.
 
-A local-first web app for carefully listening to, inspecting, and transcribing music from video or audio files.
+**Live demo:** https://tangkk.github.io/web-video-trans/  
+**GitHub:** https://github.com/tangkk/web-video-trans
 
-## What this app is for
+> Slow it down. Loop it. EQ it. See it. Transcribe it.
 
-This tool is mainly designed for **music transcription** work:
+web-video-trans is built for people who learn music by ear, transcribe performances, inspect phrases closely, and want a fast browser tool instead of a heavy DAW workflow.
 
-- slowing down a performance without making the workflow heavy
-- zooming into the waveform to inspect short phrases, attacks, and note boundaries
-- looping small sections with A/B markers
-- using EQ presets (and manual EQ shaping) to bring out instruments or voices you want to hear more clearly
-- turning the current A/B loop into a piano-roll-style transcription view
-- working from local video/audio files directly in the browser, without uploading them anywhere
+Because it is **open source**, you can use it freely, inspect how it works, modify it for your own workflow, and host your own version if you want.
 
-Typical use cases:
+---
 
-- transcribing guitar lines from a live clip
-- checking bass movement in a dense mix
-- isolating vocal details for melody or lyric transcription
-- inspecting drums, saxophone, trumpet, piano, or other instruments with EQ emphasis
-- learning by ear from downloaded performance videos or screen-recorded clips
+## Why this exists
 
-## Core features
+When you are transcribing music, the hard part usually is not pressing play.
+The hard part is:
 
-- **Local-only processing**: files stay in your browser
-- **Waveform view**: inspect timing and phrase boundaries visually
-- **Zoom + seek**: move around precisely in the material
-- **A/B loop**: repeat short passages for close listening
-- **Speed control**: slow material down for transcription
-- **Graphic EQ**:
-  - preset EQ targets such as Guitar, Bass, Saxophone, Piano, Vocal, Trumpet, Drums
-  - draggable EQ points for manual shaping
-- **Video + audio support**: load common local media formats directly
-- **A/B transcription panel**:
-  - transcribe the current A/B loop into a piano-roll note view
-  - horizontal scrolling for longer windows, with cursor-following playback
-  - visible custom horizontal scrollbar for navigation
-  - hover note labels directly on notes
-  - focus mode for a robust pitch-range view with outlier suppression
-  - fixed **2 octave** mode for a stable compact pitch view
-- **Interactive piano roll**:
-  - hover notes to inspect pitch names
-  - press / drag on notes or the pitch axis to preview pitches
-  - mouse wheel pitch-range browsing without losing the current mode
-- **Waveform interaction improvements**:
-  - A/B marker dragging has priority when the pointer is actually on A or B
-  - scrub remains available when not directly hitting A/B markers
+- hearing the same short phrase enough times
+- isolating what matters in a dense mix
+- navigating precisely to attacks and note boundaries
+- seeing pitch motion clearly enough to confirm what you think you heard
 
-## Why it is useful for transcription
+web-video-trans is designed to make that process feel quick and direct.
 
-When transcribing music, the hard part is often not just hearing the note — it is hearing the note **clearly enough, enough times, in a small enough window**, to make a confident decision.
+---
 
-This app helps with that by combining:
+## What it does
+
+### Core listening workflow
+
+- load **local video or audio files** directly in the browser
+- set **A/B loops** for short repeated listening
+- **slow down playback** for hard passages
+- **zoom into the waveform** for precise navigation
+- **scrub quickly** through the material
+
+### EQ for hearing through the mix
+
+- built-in EQ presets for instruments like:
+  - Guitar
+  - Bass
+  - Saxophone
+  - Piano
+  - Vocal
+  - Trumpet
+  - Drums
+- manual EQ adjustment with draggable points
+
+### Transcription view
+
+- transcribe the current **A/B loop** into a **piano-roll note view**
+- hover notes to see **pitch names** clearly
+- preview pitches by pressing / dragging in the piano-roll area
+- horizontal scrolling for longer windows
+- playback cursor that **automatically follows** inside the transcription panel
+- custom horizontal scrollbar for easier navigation
+
+### Pitch range modes
+
+- **Focus mode**
+  - estimates the useful pitch range from note distribution
+  - suppresses extreme outliers
+  - gives a tighter, more readable default view
+- **2 octave mode**
+  - fixed compact range
+  - useful when you want a consistent visual window
+
+### Waveform interaction improvements
+
+- dragging **A / B markers** takes priority when the pointer is actually on them
+- **scrub** still works normally when you are not directly hitting A or B
+
+---
+
+## Why it is useful
+
+This tool is especially helpful for:
+
+- transcribing guitar lines from live videos
+- following bass movement in dense arrangements
+- checking vocal melody details
+- inspecting piano voicings or horn phrases
+- learning songs from downloaded clips or screen captures
+- ear training with short repeated loops
+
+It combines the things that matter most during transcription:
 
 - repeat listening
-- waveform-guided navigation
-- playback speed adjustment
-- spectral emphasis via EQ
-- loop-based transcription visualization
+- precise seeking
+- waveform guidance
+- playback speed control
+- EQ emphasis
+- note visualization
 
-That combination makes it easier to:
+That combination makes it much easier to confirm:
 
-- detect note starts and endings
-- hear inner parts in a mix
-- compare repeated phrases
-- confirm articulation, rhythm, and pitch movement
-- spot note distribution visually inside a short loop
+- where a note starts
+- where it ends
+- whether you really heard the pitch correctly
+- how a phrase moves over time
 
-## Workflow suggestion
+---
 
-A practical transcription workflow in this app:
+## What makes it different
+
+web-video-trans is intentionally simple:
+
+- **local-first** — your files stay in your browser
+- **fast to open** — no account, no upload pipeline
+- **focused** — built for transcription and close listening, not full production
+- **open source** — transparent, hackable, and easy to extend
+
+If you want a practical transcription helper rather than a full DAW, this is the point.
+
+---
+
+## Typical workflow
 
 1. Open a local video or audio file
 2. Find the phrase you want to study
-3. Set an A/B loop around the phrase
-4. Reduce speed if needed
-5. Apply an EQ preset that highlights the target instrument
-6. Fine-tune the EQ by dragging the graphic EQ points
-7. Zoom into the waveform for more accurate seeking
-8. Run **Transcribe A-B** to generate the piano roll
-9. Use **Focus** or **2 octave** mode depending on whether you want adaptive range or a fixed compact range
-10. Hover notes to inspect pitch names and keep looping until the phrase is clear enough to write down
+3. Set an **A/B loop** around it
+4. Slow playback if needed
+5. Apply an EQ preset to highlight the target instrument
+6. Zoom into the waveform for more precise navigation
+7. Run **Transcribe A-B**
+8. Switch between **Focus** and **2 octave** view if needed
+9. Hover notes and loop until the phrase is clear enough to write down
+
+---
 
 ## Notes
 
-- The app is meant for **careful listening and transcription**, not full DAW-style production.
-- EQ presets are heuristic listening aids, not mixing presets.
-- The transcription view is designed as a practical listening aid, not a perfect symbolic transcription engine.
-- Results depend on the source audio, arrangement density, and instrument clarity.
+- This is a **listening and transcription tool**, not a DAW.
+- EQ presets are practical listening aids, not mixing presets.
+- The transcription panel is meant to help you inspect and confirm notes, not replace musical judgment.
 - Short, relatively clean, single-instrument passages usually work best.
+
+---
 
 ## Local development
 
@@ -101,7 +149,7 @@ npm run dev
 
 Then open the local Vite URL shown in the terminal.
 
-If you want to test from a phone on the same Wi‑Fi:
+To test from another device on the same Wi‑Fi:
 
 ```bash
 npm run dev -- --host 0.0.0.0
@@ -113,9 +161,13 @@ Then open:
 http://<your-mac-lan-ip>:5173/web-video-trans/
 ```
 
+---
+
 ## Open source
 
-This project is open source.
+web-video-trans is open source.
 
 - Live demo: https://tangkk.github.io/web-video-trans/
 - Source code: https://github.com/tangkk/web-video-trans
+
+If this tool is useful to you, feel free to fork it, adapt it, and build your own transcription workflow on top of it.
