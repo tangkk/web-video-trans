@@ -74,6 +74,11 @@ let waveformRangeSelect = {
   active: false,
   anchorRatio: 0,
 };
+let waveformHandleDrag = {
+  active: false,
+  handle: null,
+};
+let waveformHoveredHandle = null;
 let lastPlayheadX = 0;
 let lastPlayheadCssX = 0;
 let pipelineDebugLines = [];
@@ -436,7 +441,43 @@ function isMobileViewport() {
   return window.matchMedia('(max-width: 720px)').matches;
 }
 
-function updateViewportCursorVisibility() {
+function getWaveformHandleHit(event) {
+  if (!video.duration || !Number.isFinite(video.duration)) return null;
+  if (!(loopState.enabledA || loopState.enabledB)) return null;
+
+  const ratio = getViewportPointerRatio(event);
+  const threshold = 0.012;
+  let hit = null;
+  let bestDistance = Infinity;
+
+  if (loopState.enabledA) {
+    const aRatio = loopState.start / video.duration;
+    const distance = Math.abs(ratio - aRatio);
+    if (distance <= threshold && distance < bestDistance) {
+      hit = 'A';
+      bestDistance = distance;
+    }
+  }
+
+  if (loopState.enabledB) {
+    const bRatio = loopState.end / video.duration;
+    const distance = Math.abs(ratio - bRatio);
+    if (distance <= threshold && distance < bestDistance) {
+      hit = 'B';
+    }
+  }
+
+  return hit;
+}
+
+function updateViewportCursorVisibility(event = null) {
+  const handle = event ? getWaveformHandleHit(event) : waveformHoveredHandle;
+  waveformHoveredHandle = handle;
+  if (waveformHandleDrag.active || handle) {
+    waveCanvas.style.cursor = 'ew-resize';
+    return;
+  }
+  waveCanvas.style.cursor = 'default';
 }
 
 function getBaseTimelineWidth() {
@@ -1167,6 +1208,8 @@ function resetWaveformPointerGesture() {
     }
   }
   waveformRangeSelect.active = false;
+  waveformHandleDrag.active = false;
+  waveformHandleDrag.handle = null;
   clearWaveformLongPressTimer();
   waveformPointerGesture = null;
   isPointerSeekingWaveform = false;
@@ -1227,14 +1270,29 @@ function startWaveformPointerGesture(event) {
       return;
     }
 
-    if (event.pointerType === 'mouse') {
-      waveformRangeSelect.active = true;
-      waveformRangeSelect.anchorRatio = getViewportPointerRatio({
+    if (event.pointerType === 'mouse' && video.duration && Number.isFinite(video.duration)) {
+      const anchorRatio = getViewportPointerRatio({
         ...event,
         clientX: waveformPointerGesture.lastX,
         clientY: waveformPointerGesture.lastY,
       });
-      pushPipelineDebug('waveform:v2:range:start', `anchor=${waveformRangeSelect.anchorRatio.toFixed(4)}`);
+      const anchorTime = anchorRatio * video.duration;
+      loopState.enabledA = true;
+      loopState.enabledB = true;
+      loopState.start = anchorTime;
+      loopState.end = Math.min(video.duration, anchorTime + 0.2);
+      zoomLevel = 5;
+      zoomSlider.value = '5';
+      updateZoomLabel();
+      updateViewportCursorVisibility();
+      lastDrawnProgress = -1;
+      video.currentTime = loopState.start;
+      updateTimeline(true);
+      pushPipelineDebug('waveform:v2:mouse-longpress-range', `start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)} zoom=5`);
+      updateLoopButtons();
+      drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+      setStatus(`A-B loop: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+      return;
     }
   }, 420);
   pushPipelineDebug('waveform:v2:longpress:timer:set', `delay=420 id=${event.pointerId}`);
@@ -1269,6 +1327,18 @@ function updateWaveformPointerGesture(event) {
     setStatus(`Selecting A-B: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
   }
 
+}
+
+function finishWaveformHandleDrag(event) {
+  if (!waveformHandleDrag.active || event.pointerType !== 'mouse') return false;
+  pushPipelineDebug('waveform:v2:handle:end', `handle=${waveformHandleDrag.handle} start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)}`);
+  waveformHandleDrag.active = false;
+  waveformHandleDrag.handle = null;
+  updateLoopButtons();
+  drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+  updateViewportCursorVisibility(event);
+  setStatus(`A-B loop: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+  return true;
 }
 
 function finishWaveformPointerGesture(event) {
@@ -1561,11 +1631,45 @@ waveViewport.addEventListener('pointerdown', (event) => {
     pushPipelineDebug('waveform:pointerdown:ignored', 'invalid duration');
     return;
   }
+
+  if (event.pointerType === 'mouse') {
+    const handle = getWaveformHandleHit(event);
+    if (handle) {
+      waveformHandleDrag.active = true;
+      waveformHandleDrag.handle = handle;
+      pushPipelineDebug('waveform:v2:handle:start', `handle=${handle}`);
+      return;
+    }
+  }
+
   startWaveformPointerGesture(event);
 });
 
 waveViewport.addEventListener('pointermove', (event) => {
+  updateViewportCursorVisibility(event);
   updateWaveformPointerGesture(event);
+
+  if (waveformHandleDrag.active && event.pointerType === 'mouse' && video.duration && Number.isFinite(video.duration)) {
+    const ratio = getViewportPointerRatio(event);
+    const minGap = 0.05;
+    if (waveformHandleDrag.handle === 'A') {
+      loopState.start = Math.max(0, Math.min(ratio * video.duration, loopState.end - minGap));
+    } else if (waveformHandleDrag.handle === 'B') {
+      loopState.end = Math.min(video.duration, Math.max(ratio * video.duration, loopState.start + minGap));
+    }
+    pushPipelineDebug('waveform:v2:handle:update', `handle=${waveformHandleDrag.handle} start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)}`);
+    updateLoopButtons();
+    drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+    setStatus(`Adjusting ${waveformHandleDrag.handle}: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+  }
+});
+
+waveViewport.addEventListener('wheel', (event) => {
+  if (zoomLevel <= 1) return;
+  const dominantDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+  if (dominantDelta === 0) return;
+  event.preventDefault();
+  waveViewport.scrollLeft += dominantDelta;
 });
 
 waveViewport.addEventListener('contextmenu', (event) => {
@@ -1576,6 +1680,9 @@ waveViewport.addEventListener('contextmenu', (event) => {
 
 window.addEventListener('pointerup', (event) => {
   pushPipelineDebug('window:pointerup', `pointer=${event.pointerType} id=${event.pointerId}`);
+  if (finishWaveformHandleDrag(event)) {
+    return;
+  }
   if (waveformPointerGesture && waveformPointerGesture.pointerId === event.pointerId) {
     finishWaveformPointerGesture(event);
     return;
