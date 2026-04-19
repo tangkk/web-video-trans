@@ -908,6 +908,12 @@ function isAudioOnlyFile(file) {
   return Boolean(file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(file.name));
 }
 
+function shouldTryNativeDecode(file) {
+  if (!file) return false;
+  if (isAudioOnlyFile(file)) return true;
+  return Boolean(file.type.startsWith('video/') || /\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name));
+}
+
 function computePeaksFromChannelData(channelData) {
   const peakCount = 4000;
   const blockSize = Math.floor(channelData.length / peakCount) || 1;
@@ -951,35 +957,10 @@ async function buildWaveformFromFile(file, jobId) {
   pushPipelineDebug('buildWaveformFromFile:after-startProcessing');
 
   let context = null;
+  let audioBuffer = null;
   let audioSourceBuffer;
   const audioOnly = isAudioOnlyFile(file);
   pushPipelineDebug('buildWaveformFromFile:file-kind', audioOnly ? 'audio-only' : 'video');
-
-  if (audioOnly) {
-    updateProcessing({
-      stage: 'Reading audio file',
-      detail: 'Audio file detected. Skipping FFmpeg extraction and decoding directly in the browser…',
-      percent: 28,
-      hint: 'This is faster on phones for MP3/M4A/WAV and similar audio files.',
-    });
-
-    pushPipelineDebug('buildWaveformFromFile:audio-file-arrayBuffer:start');
-    audioSourceBuffer = await file.arrayBuffer();
-    pushPipelineDebug('buildWaveformFromFile:audio-file-arrayBuffer:done');
-  } else {
-    pushPipelineDebug('buildWaveformFromFile:video-path');
-    audioSourceBuffer = await extractAudioWithFFmpeg(file, jobId);
-    if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
-  }
-
-  updateProcessing({
-    stage: 'Decoding audio',
-    detail: isAudioOnlyFile(file)
-      ? 'Decoding the audio file in the browser…'
-      : 'Decoding the extracted WAV in the browser…',
-    percent: 88,
-    hint: 'Waveform sampling starts after this step.',
-  });
 
   pushPipelineDebug('buildWaveformFromFile:before-audio-context');
   context = await ensureAudioContext();
@@ -988,10 +969,58 @@ async function buildWaveformFromFile(file, jobId) {
     pushPipelineDebug('buildWaveformFromFile:audio-context-still-suspended');
   }
 
-  pushPipelineDebug('buildWaveformFromFile:decodeAudioData:start');
-  const audioBuffer = await context.decodeAudioData(audioSourceBuffer.slice(0));
+  if (shouldTryNativeDecode(file)) {
+    updateProcessing({
+      stage: audioOnly ? 'Reading audio file' : 'Reading media file',
+      detail: audioOnly
+        ? 'Reading the audio file for native browser decoding…'
+        : 'Trying native browser audio decode before loading FFmpeg…',
+      percent: 24,
+      hint: 'If this works, mobile loads much faster because FFmpeg is skipped.',
+    });
+    pushPipelineDebug('buildWaveformFromFile:native-arrayBuffer:start');
+    audioSourceBuffer = await file.arrayBuffer();
+    pushPipelineDebug('buildWaveformFromFile:native-arrayBuffer:done');
+
+    try {
+      updateProcessing({
+        stage: 'Decoding audio',
+        detail: audioOnly
+          ? 'Decoding the audio file directly in the browser…'
+          : 'Trying native browser decode for the video audio track…',
+        percent: 52,
+        hint: 'If native decode fails, the app will fall back to FFmpeg.',
+      });
+      pushPipelineDebug('buildWaveformFromFile:native-decode:start');
+      audioBuffer = await context.decodeAudioData(audioSourceBuffer.slice(0));
+      pushPipelineDebug('buildWaveformFromFile:native-decode:done', `channels=${audioBuffer.numberOfChannels} duration=${audioBuffer.duration.toFixed(2)}`);
+    } catch (error) {
+      pushPipelineDebug('buildWaveformFromFile:native-decode:failed', error?.message || String(error));
+      audioBuffer = null;
+    }
+  }
+
+  if (!audioBuffer && !audioOnly) {
+    pushPipelineDebug('buildWaveformFromFile:ffmpeg-fallback:start');
+    audioSourceBuffer = await extractAudioWithFFmpeg(file, jobId);
+    if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
+
+    updateProcessing({
+      stage: 'Decoding audio',
+      detail: 'Decoding the FFmpeg-extracted WAV in the browser…',
+      percent: 88,
+      hint: 'Waveform sampling starts after this step.',
+    });
+    pushPipelineDebug('buildWaveformFromFile:ffmpeg-decode:start');
+    audioBuffer = await context.decodeAudioData(audioSourceBuffer.slice(0));
+    pushPipelineDebug('buildWaveformFromFile:ffmpeg-decode:done', `channels=${audioBuffer.numberOfChannels} duration=${audioBuffer.duration.toFixed(2)}`);
+  }
+
+  if (!audioBuffer) {
+    throw new Error('Unable to decode audio track with native path or FFmpeg fallback');
+  }
+
   decodedAudioBuffer = audioBuffer;
-  pushPipelineDebug('buildWaveformFromFile:decodeAudioData:done', `channels=${audioBuffer.numberOfChannels} duration=${audioBuffer.duration.toFixed(2)}`);
   if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
 
   updateProcessing({
@@ -1465,14 +1494,14 @@ function startWaveformPointerGesture(event) {
       loopState.enabledB = true;
       loopState.start = anchorTime;
       loopState.end = Math.min(video.duration, anchorTime + 0.2);
-      zoomLevel = 5;
-      zoomSlider.value = '5';
+      zoomLevel = 10;
+      zoomSlider.value = '10';
       updateZoomLabel();
       updateViewportCursorVisibility();
       lastDrawnProgress = -1;
       video.currentTime = loopState.start;
       updateTimeline(true);
-      pushPipelineDebug('waveform:v2:longpress-range', `pointer=${event.pointerType} start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)} zoom=5`);
+      pushPipelineDebug('waveform:v2:longpress-range', `pointer=${event.pointerType} start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)} zoom=10`);
       updateLoopButtons();
       drawWaveform(video.duration ? video.currentTime / video.duration : 0);
       setStatus(`A-B loop: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
