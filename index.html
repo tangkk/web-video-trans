@@ -33,6 +33,7 @@
             <div class="wave-toolbar-left">
               <button id="openFileBtn" class="file-btn toolbar-file-btn" type="button">Open</button>
               <button id="clearBtn" class="icon-btn toolbar-clear-btn" type="button" aria-label="Clear" title="Clear">×</button>
+              <button id="debugToggleBtn" class="icon-btn shortcut-icon-btn" type="button" aria-label="Toggle debug panel" title="Toggle debug panel">⌘</button>
               <button id="shortcutBtn" class="icon-btn shortcut-icon-btn" type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
               <div id="shortcutPopover" class="shortcut-popover toolbar-shortcut-popover" hidden>
                 <div class="shortcut-title">Keyboard shortcuts</div>
@@ -93,6 +94,25 @@
             <span id="remainingTimeText">-00:00</span>
           </div>
 
+          <details class="transcribe-panel" id="transcribePanel">
+            <summary class="transcribe-summary">
+              <span>Transcribe</span>
+              <span id="transcribeBadge" class="transcribe-badge">Idle</span>
+            </summary>
+            <div id="transcribeBody" class="transcribe-body">
+              <div class="transcribe-roll-wrap">
+                <canvas id="transcribeCanvas" class="transcribe-canvas" width="960" height="260" aria-label="Transcribed piano roll"></canvas>
+              </div>
+              <div class="transcribe-controls-block">
+                <p class="transcribe-note">Turn the current A-B loop into a piano-roll note view. Best on one dominant instrument. Max 30s.</p>
+                <div class="transcribe-toolbar">
+                  <button id="transcribeBtn" class="file-btn transcribe-btn" type="button">Transcribe A-B</button>
+                  <span id="transcribeMeta" class="transcribe-meta">Set an A-B loop first.</span>
+                </div>
+              </div>
+            </div>
+          </details>
+
           <details class="eq-panel" id="eqPanel">
             <summary class="eq-summary">
               <span>EQ</span>
@@ -134,7 +154,7 @@
         </div>
 
         <div id="statusText" class="status-line">Idle</div>
-        <div class="debug-panel-shell">
+        <div id="debugPanelShell" class="debug-panel-shell" hidden>
           <div class="debug-panel-toolbar">
             <span class="debug-panel-title">Debug panel</span>
             <div class="debug-panel-actions">

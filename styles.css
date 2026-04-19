@@ -30,6 +30,11 @@ body {
   user-select: none;
 }
 
+body.debug-ui-enabled {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .page-shell {
   width: min(980px, calc(100vw - 32px));
   margin: 0 auto;
@@ -223,6 +228,12 @@ body {
   color: var(--muted);
 }
 
+.icon-btn.is-active {
+  background: #111111;
+  border-color: #111111;
+  color: #ffffff;
+}
+
 .viewer-card {
   padding: 14px;
 }
@@ -409,7 +420,8 @@ video.ready {
   margin-top: 8px;
 }
 
-.eq-panel {
+.eq-panel,
+.transcribe-panel {
   margin-top: 12px;
   border: 1px solid var(--border-soft);
   border-radius: 14px;
@@ -417,7 +429,8 @@ video.ready {
   overflow: hidden;
 }
 
-.eq-summary {
+.eq-summary,
+.transcribe-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -430,24 +443,83 @@ video.ready {
   font-weight: 700;
 }
 
-.eq-summary::-webkit-details-marker {
+.eq-summary::-webkit-details-marker,
+.transcribe-summary::-webkit-details-marker {
   display: none;
 }
 
-.eq-preset-badge {
+.eq-preset-badge,
+.transcribe-badge {
   color: var(--muted);
   font-weight: 600;
 }
 
-.eq-body {
-  padding: 0 14px 14px;
+.transcribe-badge[data-state="running"] {
+  color: #b45309;
 }
 
-.eq-note {
+.transcribe-badge[data-state="done"] {
+  color: #166534;
+}
+
+.transcribe-badge[data-state="error"] {
+  color: #b91c1c;
+}
+
+.eq-body,
+.transcribe-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.transcribe-controls-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transcribe-body.has-result .transcribe-roll-wrap {
+  order: 0;
+}
+
+.transcribe-body.has-result .transcribe-controls-block {
+  order: 1;
+}
+
+.eq-note,
+.transcribe-note {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.transcribe-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.transcribe-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.transcribe-roll-wrap {
+  margin-top: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.transcribe-canvas {
+  width: 100%;
+  height: 260px;
+  display: block;
 }
 
 .eq-presets {
@@ -842,6 +914,14 @@ video.ready {
 
   .processing-percent {
     text-align: left;
+  }
+
+  .transcribe-toolbar {
+    align-items: flex-start;
+  }
+
+  .transcribe-canvas {
+    height: 220px;
   }
 
   .timeline-row {

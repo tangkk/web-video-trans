@@ -22,6 +22,7 @@ const currentTimeTextEl = document.getElementById('currentTimeText');
 const remainingTimeTextEl = document.getElementById('remainingTimeText');
 const openFileBtn = document.getElementById('openFileBtn');
 const clearBtn = document.getElementById('clearBtn');
+const debugToggleBtn = document.getElementById('debugToggleBtn');
 const shortcutBtn = document.getElementById('shortcutBtn');
 const shortcutPopover = document.getElementById('shortcutPopover');
 const stopBtn = document.getElementById('stopBtn');
@@ -34,6 +35,7 @@ const processingDetailEl = document.getElementById('processingDetail');
 const processingPercentEl = document.getElementById('processingPercent');
 const progressFillEl = document.getElementById('progressFill');
 const processingHintEl = document.getElementById('processingHint');
+const debugPanelShell = document.getElementById('debugPanelShell');
 const debugPanel = document.getElementById('debugPanel');
 const copyDebugBtn = document.getElementById('copyDebugBtn');
 const clearDebugBtn = document.getElementById('clearDebugBtn');
@@ -41,9 +43,17 @@ const eqPanel = document.getElementById('eqPanel');
 const eqPresetBadge = document.getElementById('eqPresetBadge');
 const eqPresets = document.getElementById('eqPresets');
 const eqGraphCanvas = document.getElementById('eqGraphCanvas');
+const transcribePanel = document.getElementById('transcribePanel');
+const transcribeBody = document.getElementById('transcribeBody');
+const transcribeBadge = document.getElementById('transcribeBadge');
+const transcribeBtn = document.getElementById('transcribeBtn');
+const transcribeMeta = document.getElementById('transcribeMeta');
 
 const ctx = waveCanvas.getContext('2d');
 const eqGraphCtx = eqGraphCanvas.getContext('2d');
+const transcribeCanvas = document.getElementById('transcribeCanvas');
+
+const transcribeCtx = transcribeCanvas.getContext('2d');
 
 let objectUrl = null;
 let audioContext = null;
@@ -97,6 +107,7 @@ let lastPlayheadCssX = 0;
 let pipelineDebugLines = [];
 let pipelineDebugStartedAt = 0;
 let lastProgressDebugAt = -1;
+let debugUiEnabled = false;
 const EQ_PRESETS = {
   flat: { label: 'Flat', gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
   guitar: { label: 'Guitar', gains: [-3, -2, -1, 0, 1, 2, 3, 2, 0, -1] },
@@ -114,6 +125,23 @@ let eqFilters = [];
 let currentEqPreset = 'flat';
 let currentEqGains = [...EQ_PRESETS.flat.gains];
 let activeEqBandIndex = null;
+let basicPitchModulePromise = null;
+let basicPitchModelPromise = null;
+let currentTranscribeJobId = 0;
+let transcribeResult = null;
+let transcribeHoverNoteIndex = -1;
+let transcribePitchPreviewNodes = [];
+let activeTranscribePointerId = null;
+let transcribeView = {
+  minPitch: 48,
+  maxPitch: 84,
+};
+let transcribeState = {
+  status: 'idle',
+  message: 'Set an A-B loop first.',
+  detail: '',
+  progress: 0,
+};
 let loopState = {
   enabledA: false,
   enabledB: false,
@@ -256,6 +284,431 @@ function updateEqUi() {
   drawEqGraph();
 }
 
+function formatNoteName(midi) {
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const note = names[((midi % 12) + 12) % 12];
+  const octave = Math.floor(midi / 12) - 1;
+  return `${note}${octave}`;
+}
+
+function getLoopSpanSeconds() {
+  return isLoopActive() ? Math.max(0, loopState.end - loopState.start) : 0;
+}
+
+function resetTranscribeResult() {
+  transcribeResult = null;
+}
+
+function updateTranscribeUi() {
+  const loopSpan = getLoopSpanSeconds();
+  const hasLoop = isLoopActive();
+  const tooLong = hasLoop && loopSpan > 30;
+  const busy = transcribeState.status === 'running';
+  const hasResult = Boolean(transcribeResult);
+
+  if (transcribeBody) {
+    transcribeBody.classList.toggle('has-result', hasResult);
+  }
+
+  if (transcribeBadge) {
+    const labelMap = {
+      idle: 'Idle',
+      running: 'Running',
+      done: 'Done',
+      error: 'Failed',
+    };
+    transcribeBadge.textContent = labelMap[transcribeState.status] || 'Idle';
+    transcribeBadge.dataset.state = transcribeState.status;
+  }
+
+  if (transcribeBtn) {
+    transcribeBtn.disabled = !decodedAudioBuffer || !hasLoop || tooLong || busy || processingState.active;
+  }
+
+  if (transcribeMeta) {
+    if (busy) {
+      transcribeMeta.textContent = transcribeState.detail || transcribeState.message || 'Transcribing…';
+    } else if (!decodedAudioBuffer) {
+      transcribeMeta.textContent = 'Load a file first.';
+    } else if (!hasLoop) {
+      transcribeMeta.textContent = 'Set an A-B loop first.';
+    } else if (tooLong) {
+      transcribeMeta.textContent = `Selection is ${loopSpan.toFixed(1)}s. Trim it to 30.0s or less.`;
+    } else if (transcribeState.status === 'done' && transcribeResult?.notes?.length) {
+      transcribeMeta.textContent = `${transcribeResult.notes.length} notes · ${loopSpan.toFixed(2)}s window`;
+    } else if (transcribeState.status === 'done') {
+      transcribeMeta.textContent = `No confident notes found in ${loopSpan.toFixed(2)}s.`;
+    } else if (transcribeState.status === 'error') {
+      transcribeMeta.textContent = transcribeState.message || 'Transcription failed.';
+    } else {
+      transcribeMeta.textContent = `Ready to transcribe ${loopSpan.toFixed(2)}s from A-B.`;
+    }
+  }
+
+  drawTranscriptionRoll();
+}
+
+function setTranscribeState(status, message = '', detail = '', progress = 0) {
+  transcribeState = { status, message, detail, progress };
+  updateTranscribeUi();
+}
+
+function resizeTranscribeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = transcribeCanvas.clientWidth || 640;
+  const cssHeight = 260;
+  const width = Math.max(480, Math.floor(cssWidth * dpr));
+  const height = Math.max(240, Math.floor(cssHeight * dpr));
+
+  transcribeCanvas.style.height = `${cssHeight}px`;
+  if (transcribeCanvas.width !== width || transcribeCanvas.height !== height) {
+    transcribeCanvas.width = width;
+    transcribeCanvas.height = height;
+  }
+}
+
+function getTranscriptionMetrics() {
+  const width = transcribeCanvas.width;
+  const height = transcribeCanvas.height;
+  const padLeft = Math.max(42, width * 0.07);
+  const padRight = Math.max(14, width * 0.03);
+  const padTop = 12;
+  const padBottom = 24;
+  const innerWidth = width - padLeft - padRight;
+  const innerHeight = height - padTop - padBottom;
+  return { width, height, padLeft, padRight, padTop, padBottom, innerWidth, innerHeight };
+}
+
+function syncTranscribeViewToResult() {
+  if (!transcribeResult?.notes?.length) {
+    transcribeView.minPitch = 48;
+    transcribeView.maxPitch = 84;
+    return;
+  }
+  const minPitch = Math.min(...transcribeResult.notes.map((note) => note.pitchMidi));
+  const maxPitch = Math.max(...transcribeResult.notes.map((note) => note.pitchMidi));
+  const span = Math.max(12, maxPitch - minPitch + 5);
+  transcribeView.minPitch = Math.max(21, minPitch - 2);
+  transcribeView.maxPitch = Math.min(108, transcribeView.minPitch + span);
+}
+
+function getTranscribeCursorSeconds() {
+  if (!transcribeResult) return null;
+  const absoluteCurrent = shortLoopPlayback.active
+    ? (shortLoopPlayback.start + (((audioContext?.currentTime || 0) - shortLoopPlayback.startedAtContextTime) % Math.max(0.001, shortLoopPlayback.end - shortLoopPlayback.start)))
+    : (video.currentTime || 0);
+  const relative = absoluteCurrent - transcribeResult.startedAt;
+  if (!Number.isFinite(relative)) return null;
+  return Math.max(0, Math.min(transcribeResult.duration, relative));
+}
+
+function getTranscribeNoteAtEvent(event) {
+  if (!transcribeResult?.notes?.length) return { index: -1, note: null };
+  const rect = transcribeCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const x = (event.clientX - rect.left) * dpr;
+  const y = (event.clientY - rect.top) * dpr;
+  const { padLeft, padTop, innerWidth, innerHeight } = getTranscriptionMetrics();
+  const duration = Math.max(0.001, transcribeResult.duration || 1);
+  const pitchMin = transcribeView.minPitch;
+  const pitchMax = transcribeView.maxPitch;
+  const pitchSpan = Math.max(1, pitchMax - pitchMin + 1);
+
+  for (let i = transcribeResult.notes.length - 1; i >= 0; i -= 1) {
+    const note = transcribeResult.notes[i];
+    if (note.pitchMidi < pitchMin || note.pitchMidi > pitchMax) continue;
+    const noteX = padLeft + (note.startTimeSeconds / duration) * innerWidth;
+    const noteWidth = Math.max(2, (note.durationSeconds / duration) * innerWidth);
+    const row = pitchMax - note.pitchMidi;
+    const noteY = padTop + (row / pitchSpan) * innerHeight + 1;
+    const noteH = Math.max(4, innerHeight / pitchSpan - 2);
+    if (x >= noteX && x <= noteX + noteWidth && y >= noteY && y <= noteY + noteH) {
+      return { index: i, note };
+    }
+  }
+
+  return { index: -1, note: null };
+}
+
+function midiToFrequency(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function stopTranscribePitchPreview() {
+  transcribePitchPreviewNodes.forEach(({ oscillator, gain }) => {
+    try {
+      if (audioContext) {
+        gain.gain.cancelScheduledValues(audioContext.currentTime);
+        gain.gain.setTargetAtTime(0.0001, audioContext.currentTime, 0.02);
+        oscillator.stop(audioContext.currentTime + 0.08);
+      } else {
+        oscillator.stop();
+      }
+    } catch (error) {}
+    try { oscillator.disconnect(); } catch (error) {}
+    try { gain.disconnect(); } catch (error) {}
+  });
+  transcribePitchPreviewNodes = [];
+}
+
+async function startSustainedTranscribedPitch(pitchMidi) {
+  if (!Number.isFinite(pitchMidi)) return;
+  const context = await ensureAudioContext();
+  if (context.state === 'suspended') {
+    await context.resume();
+  }
+  stopTranscribePitchPreview();
+
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = 'triangle';
+  oscillator.frequency.value = midiToFrequency(pitchMidi);
+  gain.gain.setValueAtTime(0.0001, context.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.012);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start();
+  transcribePitchPreviewNodes.push({ oscillator, gain, pitchMidi });
+}
+
+function getPitchFromTranscribeYAxis(event) {
+  if (!transcribeResult?.notes?.length) return null;
+  const rect = transcribeCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const x = (event.clientX - rect.left) * dpr;
+  const y = (event.clientY - rect.top) * dpr;
+  const { padLeft, padTop, innerHeight } = getTranscriptionMetrics();
+  if (x > padLeft - 4) return null;
+  const pitchMin = transcribeView.minPitch;
+  const pitchMax = transcribeView.maxPitch;
+  const pitchSpan = Math.max(1, pitchMax - pitchMin + 1);
+  const relativeY = Math.max(0, Math.min(innerHeight - 1, y - padTop));
+  const row = Math.floor((relativeY / innerHeight) * pitchSpan);
+  return Math.max(pitchMin, Math.min(pitchMax, pitchMax - row));
+}
+
+function drawTranscriptionRoll() {
+  if (!transcribeCanvas || !transcribeCtx) return;
+  resizeTranscribeCanvas();
+
+  const { width, height, padLeft, padRight, padTop, padBottom, innerWidth, innerHeight } = getTranscriptionMetrics();
+  transcribeCtx.clearRect(0, 0, width, height);
+  transcribeCtx.fillStyle = '#ffffff';
+  transcribeCtx.fillRect(0, 0, width, height);
+
+  transcribeCtx.strokeStyle = 'rgba(0,0,0,0.08)';
+  transcribeCtx.lineWidth = 1;
+  transcribeCtx.strokeRect(padLeft, padTop, innerWidth, innerHeight);
+
+  if (!transcribeResult) {
+    transcribeCtx.fillStyle = '#777777';
+    transcribeCtx.font = `${Math.max(12, width * 0.015)}px Inter, sans-serif`;
+    transcribeCtx.textAlign = 'center';
+    transcribeCtx.textBaseline = 'middle';
+    transcribeCtx.fillText('No transcription yet', width / 2, height / 2);
+    return;
+  }
+
+  const notes = transcribeResult.notes || [];
+  const duration = Math.max(0.001, transcribeResult.duration || getLoopSpanSeconds() || 1);
+  if (!notes.length) {
+    transcribeCtx.fillStyle = '#777777';
+    transcribeCtx.font = `${Math.max(12, width * 0.015)}px Inter, sans-serif`;
+    transcribeCtx.textAlign = 'center';
+    transcribeCtx.textBaseline = 'middle';
+    transcribeCtx.fillText('No confident notes found', width / 2, height / 2);
+    return;
+  }
+
+  const pitchMin = transcribeView.minPitch;
+  const pitchMax = transcribeView.maxPitch;
+  const pitchSpan = Math.max(1, pitchMax - pitchMin + 1);
+
+  for (let pitch = pitchMin; pitch <= pitchMax + 1; pitch += 1) {
+    const row = pitchMax - pitch + 1;
+    const y = padTop + (row / pitchSpan) * innerHeight;
+    transcribeCtx.beginPath();
+    transcribeCtx.moveTo(padLeft, y);
+    transcribeCtx.lineTo(width - padRight, y);
+    transcribeCtx.strokeStyle = pitch % 12 === 0 ? 'rgba(0,0,0,0.09)' : 'rgba(0,0,0,0.04)';
+    transcribeCtx.stroke();
+  }
+
+  const ticks = Math.min(8, Math.max(2, Math.ceil(duration)));
+  for (let i = 0; i <= ticks; i += 1) {
+    const ratio = i / ticks;
+    const x = padLeft + ratio * innerWidth;
+    transcribeCtx.beginPath();
+    transcribeCtx.moveTo(x, padTop);
+    transcribeCtx.lineTo(x, padTop + innerHeight);
+    transcribeCtx.strokeStyle = 'rgba(0,0,0,0.06)';
+    transcribeCtx.stroke();
+
+    transcribeCtx.fillStyle = '#777777';
+    transcribeCtx.font = `${Math.max(10, width * 0.012)}px Inter, sans-serif`;
+    transcribeCtx.textAlign = i === 0 ? 'left' : i === ticks ? 'right' : 'center';
+    transcribeCtx.textBaseline = 'top';
+    transcribeCtx.fillText(`${(ratio * duration).toFixed(1)}s`, x, height - padBottom + 6);
+  }
+
+  for (let pitch = pitchMin; pitch <= pitchMax; pitch += 1) {
+    const row = pitchMax - pitch;
+    const y = padTop + (row / pitchSpan) * innerHeight;
+    const rowHeight = innerHeight / pitchSpan;
+    const isNatural = !formatNoteName(pitch).includes('#');
+    transcribeCtx.fillStyle = isNatural ? 'rgba(0,0,0,0.03)' : 'rgba(0,0,0,0.06)';
+    transcribeCtx.fillRect(0, y, padLeft - 6, rowHeight);
+    transcribeCtx.fillStyle = '#777777';
+    transcribeCtx.font = `${Math.max(9, width * 0.011)}px Inter, sans-serif`;
+    transcribeCtx.textAlign = 'right';
+    transcribeCtx.textBaseline = 'middle';
+    transcribeCtx.fillText(formatNoteName(pitch), padLeft - 8, y + rowHeight / 2);
+  }
+
+  notes.forEach((note, index) => {
+    if (note.pitchMidi < pitchMin || note.pitchMidi > pitchMax) return;
+    const x = padLeft + (note.startTimeSeconds / duration) * innerWidth;
+    const noteWidth = Math.max(2, (note.durationSeconds / duration) * innerWidth);
+    const row = pitchMax - note.pitchMidi;
+    const y = padTop + (row / pitchSpan) * innerHeight + 1;
+    const h = Math.max(4, innerHeight / pitchSpan - 2);
+    const confidence = Math.max(0, Math.min(1, note.amplitude ?? 0.6));
+    const isHovered = index === transcribeHoverNoteIndex;
+    transcribeCtx.fillStyle = isHovered ? 'rgba(217,72,39,0.92)' : `rgba(17,17,17,${0.35 + confidence * 0.55})`;
+    roundRect(transcribeCtx, x, y, noteWidth, h, Math.min(4, h / 2));
+    transcribeCtx.fill();
+  });
+
+  const cursorSeconds = getTranscribeCursorSeconds();
+  if (cursorSeconds != null) {
+    const cursorX = padLeft + (cursorSeconds / duration) * innerWidth;
+    transcribeCtx.fillStyle = 'rgba(217,72,39,0.92)';
+    transcribeCtx.fillRect(cursorX, padTop, Math.max(2, width * 0.0018), innerHeight);
+  }
+}
+
+
+async function ensureBasicPitchModel() {
+  if (!basicPitchModulePromise) {
+    basicPitchModulePromise = import('@spotify/basic-pitch');
+  }
+  const mod = await basicPitchModulePromise;
+  if (!basicPitchModelPromise) {
+    const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
+    const modelUrl = new URL('basic-pitch-model/model.json', baseUrl).href;
+    basicPitchModelPromise = Promise.resolve(new mod.BasicPitch(modelUrl));
+  }
+  return { mod, model: await basicPitchModelPromise };
+}
+
+function resampleMonoBuffer(sourceBuffer, targetSampleRate = 22050) {
+  const start = Math.max(0, Math.floor(loopState.start * sourceBuffer.sampleRate));
+  const end = Math.min(sourceBuffer.length, Math.ceil(loopState.end * sourceBuffer.sampleRate));
+  const frameCount = Math.max(1, end - start);
+  const channelCount = sourceBuffer.numberOfChannels;
+  const mono = new Float32Array(frameCount);
+
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    const data = sourceBuffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i += 1) {
+      mono[i] += data[start + i] / channelCount;
+    }
+  }
+
+  if (sourceBuffer.sampleRate === targetSampleRate) {
+    return mono;
+  }
+
+  const ratio = targetSampleRate / sourceBuffer.sampleRate;
+  const outputLength = Math.max(1, Math.round(frameCount * ratio));
+  const output = new Float32Array(outputLength);
+  for (let i = 0; i < outputLength; i += 1) {
+    const position = i / ratio;
+    const left = Math.floor(position);
+    const right = Math.min(frameCount - 1, left + 1);
+    const mix = position - left;
+    output[i] = mono[left] * (1 - mix) + mono[right] * mix;
+  }
+  return output;
+}
+
+async function runTranscription() {
+  if (!decodedAudioBuffer) {
+    setStatus('Load a file first');
+    updateTranscribeUi();
+    return;
+  }
+  if (!isLoopActive()) {
+    setStatus('Set an A-B loop before transcribing');
+    updateTranscribeUi();
+    return;
+  }
+
+  const span = getLoopSpanSeconds();
+  if (span > 30) {
+    setTranscribeState('error', `Selection is ${span.toFixed(1)}s. Trim it to 30.0s or less.`, '', 0);
+    setStatus('Transcribe refused: A-B loop is longer than 30s');
+    return;
+  }
+
+  const jobId = ++currentTranscribeJobId;
+  resetTranscribeResult();
+  if (transcribePanel) transcribePanel.open = true;
+  setTranscribeState('running', 'Loading transcription model…', 'Loading Basic Pitch…', 0);
+  setStatus('Transcribing A-B loop…');
+
+  try {
+    const { mod, model } = await ensureBasicPitchModel();
+    if (jobId !== currentTranscribeJobId) return;
+
+    setTranscribeState('running', 'Preparing audio segment…', `Using ${span.toFixed(2)}s from the current A-B loop`, 0.08);
+    const mono22050 = resampleMonoBuffer(decodedAudioBuffer, 22050);
+    if (jobId !== currentTranscribeJobId) return;
+
+    const frameCollector = { frames: [], onsets: [], contours: [] };
+    setTranscribeState('running', 'Running Basic Pitch…', 'Extracting note candidates…', 0.15);
+    await model.evaluateModel(
+      mono22050,
+      (frames, onsets, contours) => {
+        frameCollector.frames.push(...frames);
+        frameCollector.onsets.push(...onsets);
+        frameCollector.contours.push(...contours);
+      },
+      (percent) => {
+        if (jobId !== currentTranscribeJobId) return;
+        setTranscribeState('running', 'Running Basic Pitch…', `${Math.round(percent * 100)}%`, 0.15 + percent * 0.75);
+      },
+    );
+    if (jobId !== currentTranscribeJobId) return;
+
+    const noteFrames = mod.outputToNotesPoly(frameCollector.frames, frameCollector.onsets, 0.5, 0.3, 5, true, null, null, true, 11);
+    const timedNotes = mod.noteFramesToTime(noteFrames)
+      .map((note) => ({
+        pitchMidi: note.pitchMidi,
+        amplitude: note.amplitude,
+        startTimeSeconds: note.startTimeSeconds,
+        durationSeconds: note.durationSeconds,
+      }))
+      .filter((note) => note.durationSeconds > 0.03)
+      .sort((a, b) => a.startTimeSeconds - b.startTimeSeconds || a.pitchMidi - b.pitchMidi);
+
+    transcribeResult = {
+      notes: timedNotes,
+      duration: span,
+      startedAt: loopState.start,
+      endedAt: loopState.end,
+    };
+    syncTranscribeViewToResult();
+    setTranscribeState('done', timedNotes.length ? 'Transcription ready.' : 'No confident notes found.', '', 1);
+    setStatus(timedNotes.length ? `Transcribed ${timedNotes.length} notes from A-B loop` : 'Transcription finished with no confident notes');
+  } catch (error) {
+    console.error(error);
+    if (jobId !== currentTranscribeJobId) return;
+    setTranscribeState('error', error?.message || 'Transcription failed.', '', 0);
+    setStatus(`Transcription failed: ${error?.message || 'unknown error'}`);
+  }
+}
+
 async function ensureEqChain() {
   const context = await ensureAudioContext();
   if (!mediaSourceNode) {
@@ -301,6 +754,24 @@ async function applyEqPreset(presetKey) {
   currentEqGains = [...EQ_PRESETS[presetKey].gains];
   updateEqUi();
   await syncEqFiltersToCurrentGains();
+}
+
+function syncDebugUi() {
+  document.body.classList.toggle('debug-ui-enabled', debugUiEnabled);
+  if (debugPanelShell) {
+    debugPanelShell.hidden = !debugUiEnabled;
+  }
+  if (debugToggleBtn) {
+    debugToggleBtn.classList.toggle('is-active', debugUiEnabled);
+    debugToggleBtn.setAttribute('aria-pressed', debugUiEnabled ? 'true' : 'false');
+    debugToggleBtn.setAttribute('title', debugUiEnabled ? 'Hide debug panel' : 'Show debug panel');
+  }
+}
+
+function toggleDebugUi() {
+  debugUiEnabled = !debugUiEnabled;
+  syncDebugUi();
+  setStatus(debugUiEnabled ? 'Debug panel enabled · text selection enabled' : 'Debug panel hidden · text selection disabled');
 }
 
 function resetPipelineDebug() {
@@ -386,6 +857,7 @@ function updateLoopButtons() {
   setABtn.classList.toggle('is-active', loopState.enabledA);
   setBBtn.classList.toggle('is-active', loopState.enabledB);
   clearLoopBtn.disabled = !loopState.enabledA && !loopState.enabledB;
+  updateTranscribeUi();
 }
 
 function setBusyUi(busy) {
@@ -447,6 +919,9 @@ function clearLoop() {
   loopState.enabledB = false;
   loopState.start = 0;
   loopState.end = 0;
+  currentTranscribeJobId += 1;
+  resetTranscribeResult();
+  setTranscribeState('idle', 'Set an A-B loop first.', '', 0);
   updateLoopButtons();
 }
 
@@ -1023,6 +1498,8 @@ async function buildWaveformFromFile(file, jobId) {
   }
 
   decodedAudioBuffer = audioBuffer;
+  resetTranscribeResult();
+  setTranscribeState('idle', 'Set an A-B loop first.', '', 0);
   if (jobId !== currentJobId) throw new Error('File changed. Previous task cancelled');
 
   updateProcessing({
@@ -1172,6 +1649,7 @@ function clearCurrentFile() {
   stopPlaybackAnimation();
   decodedAudioBuffer = null;
   currentJobId += 1;
+  currentTranscribeJobId += 1;
   currentFile = null;
   viewerCard.classList.remove('audio-mode');
   lastKnownDuration = 0;
@@ -1192,6 +1670,8 @@ function clearCurrentFile() {
     objectUrl = null;
   }
   processingState.active = false;
+  resetTranscribeResult();
+  setTranscribeState('idle', 'Set an A-B loop first.', '', 0);
   updateProcessingUi();
   resetCanvas();
   setBusyUi(false);
@@ -1239,6 +1719,7 @@ function stopPlaybackAnimation() {
 function playbackAnimationLoop() {
   if (shortLoopPlayback.active) {
     updateTimeline();
+    drawTranscriptionRoll();
     rafId = requestAnimationFrame(playbackAnimationLoop);
     return;
   }
@@ -1246,6 +1727,7 @@ function playbackAnimationLoop() {
   if (!video.paused && !video.ended) {
     enforceLoopPlayback();
     updateTimeline();
+    drawTranscriptionRoll();
     rafId = requestAnimationFrame(playbackAnimationLoop);
   } else {
     rafId = null;
@@ -1518,6 +2000,11 @@ function updateWaveformPointerGesture(event) {
   waveformPointerGesture.lastX = event.clientX;
   waveformPointerGesture.lastY = event.clientY;
 
+  if (waveformHandleDrag.active && event.pointerType === 'mouse') {
+    pushPipelineDebug('waveform:gesture:move:skip-mouse-handle-drag', `id=${event.pointerId} handle=${waveformHandleDrag.handle}`);
+    return;
+  }
+
   const deltaX = event.clientX - waveformPointerGesture.startX;
   const deltaY = event.clientY - waveformPointerGesture.startY;
   const movedFar = Math.hypot(deltaX, deltaY) > 12;
@@ -1734,6 +2221,7 @@ function handleClearAction() {
 clearBtn.addEventListener('click', handleClearAction);
 mobileClearBtn.addEventListener('click', handleClearAction);
 if (mobileAudioClearBtn) mobileAudioClearBtn.addEventListener('click', handleClearAction);
+if (debugToggleBtn) debugToggleBtn.addEventListener('click', toggleDebugUi);
 stopBtn.addEventListener('click', stopToStart);
 playPauseBtn.addEventListener('click', togglePlayPause);
 clearLoopBtn.addEventListener('click', () => {
@@ -1747,6 +2235,10 @@ if (eqPresets) {
     if (!button) return;
     applyEqPreset(button.dataset.eqPreset);
   });
+}
+
+if (transcribeBtn) {
+  transcribeBtn.addEventListener('click', runTranscription);
 }
 
 if (eqGraphCanvas) {
@@ -1797,11 +2289,35 @@ if (copyDebugBtn) {
   copyDebugBtn.addEventListener('click', async () => {
     const debugText = pipelineDebugLines.length ? pipelineDebugLines.join('\n') : 'debug panel ready';
     try {
-      await navigator.clipboard.writeText(debugText);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(debugText);
+      } else {
+        throw new Error('Clipboard API unavailable');
+      }
       setStatus('Debug log copied');
     } catch (error) {
       pushPipelineDebug('debug:copy:error', error?.message || String(error));
-      setStatus('Debug log copy failed');
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = debugText;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.top = '-9999px';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error('execCommand copy failed');
+        }
+        setStatus('Debug log copied');
+      } catch (fallbackError) {
+        pushPipelineDebug('debug:copy:fallback-error', fallbackError?.message || String(fallbackError));
+        setStatus('Debug log copy failed');
+      }
     }
   });
 }
@@ -1879,6 +2395,26 @@ waveViewport.addEventListener('pointerdown', (event) => {
     handle = getWaveformHandleHit(event);
   }
   if (handle) {
+    if (event.pointerType === 'mouse') {
+      clearWaveformLongPressTimer();
+      waveformPointerGesture = null;
+      waveformRangeSelect.active = false;
+      waveformHandleDrag.active = true;
+      waveformHandleDrag.handle = handle;
+      waveformHandleDrag.pendingHandle = null;
+      isWaveViewportPanning = false;
+      syncWaveViewportTouchAction();
+      try {
+        waveViewport.setPointerCapture(event.pointerId);
+      } catch (error) {
+        pushPipelineDebug('waveform:v2:pointercapture:set:error', error?.message || String(error));
+      }
+      pushPipelineDebug('waveform:v2:handle:start-immediate', `pointer=${event.pointerType} handle=${handle}`);
+      updateViewportCursorVisibility(event);
+      setStatus(`Adjusting ${handle}: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+      return;
+    }
+
     waveformHandleDrag.pendingHandle = handle;
     syncWaveViewportTouchAction();
     pushPipelineDebug('waveform:v2:handle:pending', `pointer=${event.pointerType} handle=${handle}`);
@@ -1939,6 +2475,10 @@ waveViewport.addEventListener('contextmenu', (event) => {
 window.addEventListener('pointerup', (event) => {
   pushPipelineDebug('window:pointerup', `pointer=${event.pointerType} id=${event.pointerId}`);
   if (finishWaveformHandleDrag(event)) {
+    if (waveformPointerGesture && waveformPointerGesture.pointerId === event.pointerId) {
+      stopWaveformLongPressPreview();
+      resetWaveformPointerGesture();
+    }
     return;
   }
   if (waveformPointerGesture && waveformPointerGesture.pointerId === event.pointerId) {
@@ -2047,8 +2587,79 @@ window.addEventListener('resize', () => {
   updateViewportCursorVisibility();
   lastDrawnProgress = -1;
   drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+  drawTranscriptionRoll();
   updateDebugPanel();
 });
+
+if (transcribeCanvas) {
+  transcribeCanvas.addEventListener('pointermove', async (event) => {
+    const { index, note } = getTranscribeNoteAtEvent(event);
+    transcribeHoverNoteIndex = index;
+    const axisPitch = getPitchFromTranscribeYAxis(event);
+    transcribeCanvas.style.cursor = note || axisPitch != null ? 'pointer' : 'default';
+
+    if (activeTranscribePointerId === event.pointerId && (event.buttons & 1) === 1) {
+      const targetPitch = note?.pitchMidi ?? axisPitch;
+      const activePitch = transcribePitchPreviewNodes[0]?.pitchMidi ?? null;
+      if (targetPitch != null && targetPitch !== activePitch) {
+        await startSustainedTranscribedPitch(targetPitch);
+        setStatus(`Pitch preview: ${formatNoteName(targetPitch)}`);
+      }
+    }
+
+    drawTranscriptionRoll();
+  });
+
+  transcribeCanvas.addEventListener('pointerleave', () => {
+    transcribeHoverNoteIndex = -1;
+    transcribeCanvas.style.cursor = 'default';
+    drawTranscriptionRoll();
+  });
+
+  transcribeCanvas.addEventListener('pointerdown', async (event) => {
+    const { note } = getTranscribeNoteAtEvent(event);
+    const axisPitch = getPitchFromTranscribeYAxis(event);
+    const targetPitch = note?.pitchMidi ?? axisPitch;
+    if (targetPitch == null) return;
+    activeTranscribePointerId = event.pointerId;
+    try {
+      transcribeCanvas.setPointerCapture(event.pointerId);
+    } catch (error) {}
+    await startSustainedTranscribedPitch(targetPitch);
+    setStatus(`Pitch preview: ${formatNoteName(targetPitch)}`);
+  });
+
+  const stopTranscribePointerPreview = (event) => {
+    if (activeTranscribePointerId == null) return;
+    if (event && event.pointerId !== activeTranscribePointerId) return;
+    activeTranscribePointerId = null;
+    stopTranscribePitchPreview();
+  };
+
+  transcribeCanvas.addEventListener('pointerup', stopTranscribePointerPreview);
+  transcribeCanvas.addEventListener('pointercancel', stopTranscribePointerPreview);
+
+  transcribeCanvas.addEventListener('wheel', (event) => {
+    if (!transcribeResult?.notes?.length) return;
+    event.preventDefault();
+    const direction = Math.sign(event.deltaY) || 1;
+    const step = event.shiftKey ? 12 : 3;
+    const span = transcribeView.maxPitch - transcribeView.minPitch;
+    let nextMin = transcribeView.minPitch + direction * step;
+    let nextMax = nextMin + span;
+    if (nextMin < 21) {
+      nextMin = 21;
+      nextMax = nextMin + span;
+    }
+    if (nextMax > 108) {
+      nextMax = 108;
+      nextMin = nextMax - span;
+    }
+    transcribeView.minPitch = nextMin;
+    transcribeView.maxPitch = nextMax;
+    drawTranscriptionRoll();
+  }, { passive: false });
+}
 window.addEventListener('beforeunload', stopPlaybackAnimation);
 
 updateProcessingUi();
@@ -2058,4 +2669,7 @@ updatePlayPauseButton();
 updateViewportCursorVisibility();
 updateZoomLabel();
 updateEqUi();
+setTranscribeState('idle', 'Set an A-B loop first.', '', 0);
+syncDebugUi();
 drawWaveform();
+drawTranscriptionRoll();
