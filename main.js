@@ -1085,6 +1085,13 @@ function startPlaybackAnimation() {
   playbackAnimationLoop();
 }
 
+function forceSeekToLoopStart(reason = 'unknown') {
+  if (!isLoopActive() || !video.duration || !Number.isFinite(video.duration)) return;
+  video.currentTime = loopState.start;
+  updateTimeline(true);
+  pushPipelineDebug('ab:seek-to-a', `reason=${reason} at=${loopState.start.toFixed(3)}`);
+}
+
 function handleSeekByRatio(ratio) {
   if (!video.duration || !Number.isFinite(video.duration)) return;
   const clamped = Math.max(0, Math.min(1, ratio));
@@ -1392,9 +1399,7 @@ function finishWaveformPointerGesture(event) {
     waveformRangeSelect.active = false;
     pushPipelineDebug('waveform:v2:range:end', `start=${loopState.start.toFixed(3)} end=${loopState.end.toFixed(3)} active=${isLoopActive()}`);
     if (isLoopActive()) {
-      video.currentTime = loopState.start;
-      updateTimeline(true);
-      pushPipelineDebug('waveform:v2:range:seek-to-a', `at=${loopState.start.toFixed(3)}`);
+      forceSeekToLoopStart('range-end');
       setStatus(`A-B loop: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
     } else {
       clearLoop();
@@ -1483,8 +1488,7 @@ function togglePlayPause() {
   pushPipelineDebug('playback:toggle', `paused=${video.paused} ended=${video.ended} current=${video.currentTime.toFixed(3)} loop=${isLoopActive()}`);
   if (video.paused || video.ended) {
     if (isLoopActive() && (video.currentTime < loopState.start || video.currentTime >= loopState.end)) {
-      video.currentTime = loopState.start;
-      pushPipelineDebug('playback:toggle:seek-to-a', `at=${loopState.start.toFixed(3)}`);
+      forceSeekToLoopStart('toggle-play');
     }
     const playResult = video.play();
     if (playResult && typeof playResult.then === 'function') {
@@ -1630,7 +1634,11 @@ window.addEventListener('click', (event) => {
 video.addEventListener('loadedmetadata', () => {
   lastKnownDuration = video.duration || 0;
   lastTimelineTextSecond = -1;
-  updateTimeline(true);
+  if (isLoopActive()) {
+    forceSeekToLoopStart('loadedmetadata');
+  } else {
+    updateTimeline(true);
+  }
 });
 
 video.addEventListener('timeupdate', () => {
@@ -1641,8 +1649,7 @@ video.addEventListener('play', () => {
   lastProgressDebugAt = -1;
   pushPipelineDebug('video:event:play', `current=${video.currentTime.toFixed(3)} loop=${isLoopActive()}`);
   if (isLoopActive() && (video.currentTime < loopState.start || video.currentTime >= loopState.end)) {
-    video.currentTime = loopState.start;
-    pushPipelineDebug('video:event:play:seek-to-a', `at=${loopState.start.toFixed(3)}`);
+    forceSeekToLoopStart('video-play');
   }
   updatePlayPauseButton();
   setStatus(isLoopActive() ? `Looping ${formatTime(loopState.start)} → ${formatTime(loopState.end)}` : 'Playing');
