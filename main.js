@@ -1096,7 +1096,11 @@ function getWaveformHandleHit(event, { allowNearest = false } = {}) {
   if (!(loopState.enabledA || loopState.enabledB)) return null;
 
   const ratio = getViewportPointerRatio(event);
-  const threshold = event.pointerType === 'touch' ? 0.02 : 0.012;
+  const rect = waveCanvas.getBoundingClientRect();
+  const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || rect.width || 1;
+  const touchThresholdRatio = Math.max(0.004, 16 / canvasCssWidth);
+  const mouseThresholdRatio = Math.max(0.003, 10 / canvasCssWidth);
+  const threshold = event.pointerType === 'touch' ? touchThresholdRatio : mouseThresholdRatio;
   let hit = null;
   let bestDistance = Infinity;
 
@@ -1928,6 +1932,27 @@ function getViewportPointerRatio(event) {
   const absoluteCssX = waveViewport.scrollLeft + viewportRatio * rect.width;
   const canvasCssWidth = parseFloat(waveCanvas.style.width || '0') || rect.width;
   return Math.max(0, Math.min(1, absoluteCssX / canvasCssWidth));
+}
+
+function autoScrollWaveViewportWhileDragging(clientX) {
+  if (zoomLevel <= 1) return;
+  const rect = waveViewport.getBoundingClientRect();
+  const edgeThreshold = Math.min(56, rect.width * 0.18);
+  const maxScroll = Math.max(0, waveViewport.scrollWidth - waveViewport.clientWidth);
+  if (maxScroll <= 0) return;
+
+  let delta = 0;
+  if (clientX < rect.left + edgeThreshold) {
+    const strength = 1 - ((clientX - rect.left) / edgeThreshold);
+    delta = -Math.max(6, Math.round(22 * Math.max(0, strength)));
+  } else if (clientX > rect.right - edgeThreshold) {
+    const strength = 1 - ((rect.right - clientX) / edgeThreshold);
+    delta = Math.max(6, Math.round(22 * Math.max(0, strength)));
+  }
+
+  if (delta !== 0) {
+    waveViewport.scrollLeft = Math.max(0, Math.min(maxScroll, waveViewport.scrollLeft + delta));
+  }
 }
 
 function maybeRequestNextScrubSeekFrame() {
@@ -2807,44 +2832,9 @@ waveViewport.addEventListener('pointerdown', (event) => {
     return;
   }
 
-  let handle = null;
-  if (event.pointerType === 'mouse') {
-    handle = getWaveformHandleHit(event);
-  } else if (isLoopActive()) {
-    handle = getWaveformHandleHit(event, { allowNearest: true });
-  } else {
-    handle = getWaveformHandleHit(event);
-  }
-  if (handle) {
-    if (event.pointerType === 'mouse') {
-      clearWaveformLongPressTimer();
-      waveformPointerGesture = null;
-      waveformRangeSelect.active = false;
-      waveformHandleDrag.active = true;
-      waveformHandleDrag.handle = handle;
-      waveformHandleDrag.pendingHandle = null;
-      isWaveViewportPanning = false;
-      syncWaveViewportTouchAction();
-      try {
-        waveViewport.setPointerCapture(event.pointerId);
-      } catch (error) {
-        pushPipelineDebug('waveform:v2:pointercapture:set:error', error?.message || String(error));
-      }
-      pushPipelineDebug('waveform:v2:handle:start-immediate', `pointer=${event.pointerType} handle=${handle}`);
-      updateViewportCursorVisibility(event);
-      setStatus(`Adjusting ${handle}: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
-      return;
-    }
-
-    waveformHandleDrag.pendingHandle = handle;
-    syncWaveViewportTouchAction();
-    pushPipelineDebug('waveform:v2:handle:pending', `pointer=${event.pointerType} handle=${handle}`);
-  } else {
+  if (isNearWaveformCursor(event, event.pointerType === 'touch' ? 20 : 12)) {
     waveformHandleDrag.pendingHandle = null;
     syncWaveViewportTouchAction();
-  }
-
-  if (isNearWaveformCursor(event, event.pointerType === 'touch' ? 20 : 12)) {
     waveformCursorDrag.active = true;
     waveformCursorDrag.pointerId = event.pointerId;
     waveformCursorDrag.pointerType = event.pointerType;
@@ -2870,6 +2860,35 @@ waveViewport.addEventListener('pointerdown', (event) => {
     setStatus(`Scrubbing: ${formatTime(targetTime)}`);
     return;
   }
+
+  let handle = null;
+  if (event.pointerType === 'mouse') {
+    handle = getWaveformHandleHit(event);
+  } else {
+    handle = getWaveformHandleHit(event);
+  }
+  if (handle) {
+    clearWaveformLongPressTimer();
+    waveformPointerGesture = null;
+    waveformRangeSelect.active = false;
+    waveformHandleDrag.active = true;
+    waveformHandleDrag.handle = handle;
+    waveformHandleDrag.pendingHandle = null;
+    isWaveViewportPanning = false;
+    syncWaveViewportTouchAction();
+    try {
+      waveViewport.setPointerCapture(event.pointerId);
+    } catch (error) {
+      pushPipelineDebug('waveform:v2:pointercapture:set:error', error?.message || String(error));
+    }
+    pushPipelineDebug('waveform:v2:handle:start-immediate', `pointer=${event.pointerType} handle=${handle}`);
+    updateViewportCursorVisibility(event);
+    setStatus(`Adjusting ${handle}: ${formatTime(loopState.start)} → ${formatTime(loopState.end)}`);
+    return;
+  }
+
+  waveformHandleDrag.pendingHandle = null;
+  syncWaveViewportTouchAction();
 
   startWaveformPointerGesture(event);
 });
@@ -2901,6 +2920,7 @@ waveViewport.addEventListener('pointermove', (event) => {
 
   if (waveformHandleDrag.active && video.duration && Number.isFinite(video.duration)) {
     isWaveViewportPanning = false;
+    autoScrollWaveViewportWhileDragging(event.clientX);
     const ratio = getViewportPointerRatio(event);
     const minGap = 0.05;
     if (waveformHandleDrag.handle === 'A') {
@@ -3139,23 +3159,29 @@ if (transcribeCanvas) {
   });
 
   transcribeCanvas.addEventListener('pointerdown', async (event) => {
-    const { note } = getTranscribeNoteAtEvent(event);
+    const { index, note, noteRect } = getTranscribeNoteAtEvent(event);
     const axisPitch = getPitchFromTranscribeYAxis(event);
     const targetPitch = note?.pitchMidi ?? axisPitch;
     if (targetPitch == null) return;
+    transcribeHoverNoteIndex = index;
+    updateTranscribeHoverLabel(note, noteRect);
     activeTranscribePointerId = event.pointerId;
     try {
       transcribeCanvas.setPointerCapture(event.pointerId);
     } catch (error) {}
     await startSustainedTranscribedPitch(targetPitch);
     setStatus(`Pitch preview: ${formatNoteName(targetPitch)}`);
+    drawTranscriptionRoll();
   });
 
   const stopTranscribePointerPreview = (event) => {
     if (activeTranscribePointerId == null) return;
     if (event && event.pointerId !== activeTranscribePointerId) return;
     activeTranscribePointerId = null;
+    transcribeHoverNoteIndex = -1;
+    updateTranscribeHoverLabel(null, null);
     stopTranscribePitchPreview();
+    drawTranscriptionRoll();
   };
 
   transcribeCanvas.addEventListener('pointerup', stopTranscribePointerPreview);
