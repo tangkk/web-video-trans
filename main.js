@@ -107,13 +107,16 @@ let waveformHandleDrag = {
 let waveformCursorDrag = {
   active: false,
   pointerId: null,
+  pointerType: null,
   idleTimer: null,
   continuousPlay: false,
   holdScrubTimer: null,
 };
 let scrubPreviewSourceNode = null;
+let scrubPreviewGainNode = null;
 let lastScrubPreviewAt = 0;
 let lastScrubPreviewTime = -1;
+let lastScrubVideoSyncAt = 0;
 let isWaveViewportPanning = false;
 let waveformHoveredHandle = null;
 let lastPlayheadX = 0;
@@ -169,6 +172,14 @@ let processingState = {
   stage: 'Preparing',
   detail: 'Waiting to start',
   hint: 'The first run may take longer because FFmpeg core needs to load.',
+};
+let scrubSeekState = {
+  active: false,
+  pendingTime: null,
+  rafId: null,
+  lastAppliedTime: -1,
+  waitingForSeeked: false,
+  frameRequestPending: false,
 };
 
 function formatTime(seconds) {
@@ -1111,7 +1122,7 @@ function getWaveformHandleHit(event, { allowNearest = false } = {}) {
 }
 
 function syncWaveViewportTouchAction() {
-  if (waveformHandleDrag.active || waveformHandleDrag.pendingHandle) {
+  if (waveformCursorDrag.active || waveformHandleDrag.active || waveformHandleDrag.pendingHandle) {
     waveViewport.style.touchAction = 'none';
     return;
   }
@@ -1919,10 +1930,85 @@ function getViewportPointerRatio(event) {
   return Math.max(0, Math.min(1, absoluteCssX / canvasCssWidth));
 }
 
+function maybeRequestNextScrubSeekFrame() {
+  if (!scrubSeekState.active || scrubSeekState.pendingTime == null || scrubSeekState.waitingForSeeked) return;
+  if (scrubSeekState.rafId != null) return;
+  scrubSeekState.rafId = window.requestAnimationFrame(flushScrubSeekFrame);
+}
+
+function finalizeScrubVideoFrame() {
+  scrubSeekState.frameRequestPending = false;
+  updateTimeline(true);
+  drawWaveform(video.duration ? video.currentTime / video.duration : 0);
+  maybeRequestNextScrubSeekFrame();
+}
+
+function requestScrubVideoFrameFinalize() {
+  if (scrubSeekState.frameRequestPending) return;
+  scrubSeekState.frameRequestPending = true;
+
+  if (typeof video.requestVideoFrameCallback === 'function') {
+    video.requestVideoFrameCallback(() => {
+      finalizeScrubVideoFrame();
+    });
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    finalizeScrubVideoFrame();
+  });
+}
+
+function flushScrubSeekFrame() {
+  scrubSeekState.rafId = null;
+  if (!scrubSeekState.active || scrubSeekState.pendingTime == null || !video.duration || !Number.isFinite(video.duration)) return;
+  if (scrubSeekState.waitingForSeeked) return;
+
+  const targetTime = Math.max(0, Math.min(video.duration, scrubSeekState.pendingTime));
+  scrubSeekState.pendingTime = null;
+
+  if (Math.abs(targetTime - scrubSeekState.lastAppliedTime) <= 0.001) {
+    requestScrubVideoFrameFinalize();
+    return;
+  }
+
+  scrubSeekState.waitingForSeeked = true;
+  scrubSeekState.lastAppliedTime = targetTime;
+  video.currentTime = targetTime;
+  updateTimeline(true);
+  drawWaveform(targetTime / video.duration);
+}
+
+function scheduleScrubSeek(targetTime) {
+  if (!video.duration || !Number.isFinite(video.duration)) return;
+  scrubSeekState.active = true;
+  scrubSeekState.pendingTime = Math.max(0, Math.min(video.duration, targetTime));
+  maybeRequestNextScrubSeekFrame();
+}
+
+function stopScrubSeek() {
+  scrubSeekState.active = false;
+  scrubSeekState.pendingTime = null;
+  scrubSeekState.lastAppliedTime = -1;
+  scrubSeekState.waitingForSeeked = false;
+  scrubSeekState.frameRequestPending = false;
+  if (scrubSeekState.rafId != null) {
+    window.cancelAnimationFrame(scrubSeekState.rafId);
+    scrubSeekState.rafId = null;
+  }
+}
+
 function handleSeekFromViewportPointer(event) {
   if (!video.duration || !Number.isFinite(video.duration)) return;
 
   const ratio = getViewportPointerRatio(event);
+  const targetTime = Math.max(0, Math.min(video.duration, ratio * video.duration));
+
+  if (waveformCursorDrag.active) {
+    scheduleScrubSeek(targetTime);
+    return;
+  }
+
   handleSeekByRatio(ratio);
 }
 
@@ -1953,13 +2039,44 @@ function clearWaveformCursorHoldScrubTimer() {
 
 function stopScrubPreview() {
   if (!scrubPreviewSourceNode) return;
-  try {
-    scrubPreviewSourceNode.stop();
-  } catch (error) {}
-  try {
-    scrubPreviewSourceNode.disconnect();
-  } catch (error) {}
+
+  const context = audioContext;
+  const source = scrubPreviewSourceNode;
+  const gain = scrubPreviewGainNode;
+
   scrubPreviewSourceNode = null;
+  scrubPreviewGainNode = null;
+
+  if (gain && context) {
+    try {
+      const now = context.currentTime;
+      gain.gain.cancelScheduledValues(now);
+      const currentGain = Math.max(0.0001, gain.gain.value || 0.0001);
+      gain.gain.setValueAtTime(currentGain, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
+      source.stop(now + 0.028);
+    } catch (error) {
+      try {
+        source.stop();
+      } catch (innerError) {}
+    }
+  } else {
+    try {
+      source.stop();
+    } catch (error) {}
+  }
+
+  source.onended = null;
+  window.setTimeout(() => {
+    try {
+      source.disconnect();
+    } catch (error) {}
+    if (gain) {
+      try {
+        gain.disconnect();
+      } catch (error) {}
+    }
+  }, 40);
 }
 
 function stopCursorContinuousPlayback() {
@@ -1982,10 +2099,37 @@ function armCursorContinuousPlayback() {
   // Keep cursor drag in scrub mode until pointerup.
 }
 
+function findNearestZeroCrossing(channelData, sampleRate, targetTime, searchWindowSeconds = 0.014) {
+  if (!channelData || !channelData.length || !sampleRate) return targetTime;
+
+  const targetIndex = Math.max(2, Math.min(channelData.length - 3, Math.round(targetTime * sampleRate)));
+  const radius = Math.max(16, Math.floor(searchWindowSeconds * sampleRate));
+  let bestIndex = targetIndex;
+  let bestScore = Infinity;
+
+  for (let i = Math.max(2, targetIndex - radius); i <= Math.min(channelData.length - 3, targetIndex + radius); i += 1) {
+    const prev = channelData[i - 1];
+    const curr = channelData[i];
+    const next = channelData[i + 1];
+    const crossed = (prev <= 0 && curr >= 0) || (prev >= 0 && curr <= 0);
+    const localEnergy = Math.abs(prev) + Math.abs(curr) + Math.abs(next);
+    const slope = Math.abs(next - prev);
+    const distancePenalty = Math.abs(i - targetIndex) / radius;
+    const score = (localEnergy * 1.8) + (slope * 0.35) + distancePenalty;
+
+    if (crossed && score < bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex / sampleRate;
+}
+
 async function playScrubPreviewAt(timeSeconds) {
   if (!decodedAudioBuffer) return;
   const now = performance.now();
-  if (now - lastScrubPreviewAt < 42 && Math.abs(timeSeconds - lastScrubPreviewTime) < 0.025) {
+  if (now - lastScrubPreviewAt < 48 && Math.abs(timeSeconds - lastScrubPreviewTime) < 0.03) {
     return;
   }
   lastScrubPreviewAt = now;
@@ -2001,20 +2145,38 @@ async function playScrubPreviewAt(timeSeconds) {
   const gain = context.createGain();
   source.buffer = decodedAudioBuffer;
   source.playbackRate.value = 1;
+
+  const previewDuration = 0.085;
+  const rawSafeTime = Math.max(0, Math.min(decodedAudioBuffer.duration - previewDuration - 0.01, timeSeconds));
+  const channelData = decodedAudioBuffer.getChannelData(0);
+  const safeTime = findNearestZeroCrossing(channelData, decodedAudioBuffer.sampleRate, rawSafeTime, 0.014);
+
+  const attack = 0.012;
+  const settle = 0.038;
+  const release = 0.03;
+  const peakGain = 1.1;
+  const sustainGain = 0.8;
+  const overlapLead = 0.006;
+  const startAt = context.currentTime + overlapLead;
+  const fadeOutAt = startAt + Math.max(attack + settle, previewDuration - release);
+  const stopAt = startAt + previewDuration + 0.014;
+
   gain.gain.setValueAtTime(0.0001, context.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.4, context.currentTime + 0.006);
-  gain.gain.exponentialRampToValueAtTime(0.26, context.currentTime + 0.05);
-  gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.14);
+  gain.gain.linearRampToValueAtTime(peakGain, startAt + attack);
+  gain.gain.linearRampToValueAtTime(sustainGain, startAt + settle);
+  gain.gain.setValueAtTime(sustainGain, fadeOutAt);
+  gain.gain.linearRampToValueAtTime(0.0001, fadeOutAt + release);
+
   source.connect(gain);
   gain.connect(context.destination);
-  const previewDuration = 0.14;
-  const safeTime = Math.max(0, Math.min(decodedAudioBuffer.duration - previewDuration - 0.01, timeSeconds));
-  source.start(context.currentTime, safeTime, previewDuration);
-  source.stop(context.currentTime + 0.16);
+  source.start(startAt, safeTime, previewDuration);
+  source.stop(stopAt);
   scrubPreviewSourceNode = source;
+  scrubPreviewGainNode = gain;
   source.onended = () => {
     if (scrubPreviewSourceNode === source) {
       scrubPreviewSourceNode = null;
+      scrubPreviewGainNode = null;
     }
   };
 }
@@ -2602,6 +2764,15 @@ video.addEventListener('timeupdate', () => {
   enforceLoopPlayback();
   updateTimeline(false);
 });
+video.addEventListener('seeking', () => {
+  if (!scrubSeekState.active) return;
+  scrubSeekState.waitingForSeeked = true;
+});
+video.addEventListener('seeked', () => {
+  if (!scrubSeekState.active) return;
+  scrubSeekState.waitingForSeeked = false;
+  requestScrubVideoFrameFinalize();
+});
 video.addEventListener('play', () => {
   lastProgressDebugAt = -1;
   pushPipelineDebug('video:event:play', `current=${video.currentTime.toFixed(3)} loop=${isLoopActive()}`);
@@ -2673,10 +2844,12 @@ waveViewport.addEventListener('pointerdown', (event) => {
     syncWaveViewportTouchAction();
   }
 
-  if (event.pointerType === 'mouse' && isNearWaveformCursor(event, 12)) {
+  if (isNearWaveformCursor(event, event.pointerType === 'touch' ? 20 : 12)) {
     waveformCursorDrag.active = true;
     waveformCursorDrag.pointerId = event.pointerId;
+    waveformCursorDrag.pointerType = event.pointerType;
     waveformCursorDrag.continuousPlay = false;
+    syncWaveViewportTouchAction();
     clearWaveformCursorIdleTimer();
     clearWaveformCursorHoldScrubTimer();
     stopShortAudioLoop();
@@ -2687,12 +2860,14 @@ waveViewport.addEventListener('pointerdown', (event) => {
       pushPipelineDebug('waveform:cursor:pointercapture:set:error', error?.message || String(error));
     }
     pushPipelineDebug('waveform:cursor:drag:start', `pointer=${event.pointerType} id=${event.pointerId}`);
-    handleSeekFromViewportPointer(event);
-    playScrubPreviewAt(video.currentTime).catch((error) => {
+    const ratio = getViewportPointerRatio(event);
+    const targetTime = Math.max(0, Math.min(video.duration || 0, ratio * (video.duration || 0)));
+    scheduleScrubSeek(targetTime);
+    playScrubPreviewAt(targetTime).catch((error) => {
       pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
     });
     armCursorHoldScrub();
-    setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
+    setStatus(`Scrubbing: ${formatTime(targetTime)}`);
     return;
   }
 
@@ -2700,6 +2875,10 @@ waveViewport.addEventListener('pointerdown', (event) => {
 });
 
 waveViewport.addEventListener('pointermove', (event) => {
+  if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId && event.cancelable) {
+    event.preventDefault();
+  }
+
   const nearCursor = isNearWaveformCursor(event, 16);
   updateViewportCursorVisibility(event);
   waveViewport.classList.toggle('cursor-scrub-hover', !waveformHandleDrag.active && !waveformCursorDrag.active && nearCursor);
@@ -2707,13 +2886,14 @@ waveViewport.addEventListener('pointermove', (event) => {
   waveViewport.classList.remove('cursor-scrub-hover');
 
   if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId) {
-    handleSeekFromViewportPointer(event);
-    playScrubPreviewAt(video.currentTime).catch((error) => {
+    const ratio = getViewportPointerRatio(event);
+    const targetTime = Math.max(0, Math.min(video.duration || 0, ratio * (video.duration || 0)));
+    scheduleScrubSeek(targetTime);
+    playScrubPreviewAt(targetTime).catch((error) => {
       pushPipelineDebug('waveform:cursor:scrub:error', error?.message || String(error));
     });
     armCursorHoldScrub();
-    drawWaveform(video.duration ? video.currentTime / video.duration : 0);
-    setStatus(`Scrubbing: ${formatTime(video.currentTime)}`);
+    setStatus(`Scrubbing: ${formatTime(targetTime)}`);
     return;
   }
 
@@ -2750,7 +2930,7 @@ waveViewport.addEventListener('touchstart', (event) => {
 }, { passive: false });
 
 waveViewport.addEventListener('touchmove', (event) => {
-  if (waveformHandleDrag.pendingHandle || waveformHandleDrag.active) {
+  if (waveformCursorDrag.active || waveformHandleDrag.pendingHandle || waveformHandleDrag.active) {
     event.preventDefault();
   }
 }, { passive: false });
@@ -2767,6 +2947,9 @@ window.addEventListener('pointerup', (event) => {
     pushPipelineDebug('waveform:cursor:drag:end', `id=${event.pointerId} time=${video.currentTime.toFixed(3)}`);
     waveformCursorDrag.active = false;
     waveformCursorDrag.pointerId = null;
+    waveformCursorDrag.pointerType = null;
+    stopScrubSeek();
+    syncWaveViewportTouchAction();
     clearWaveformCursorIdleTimer();
     clearWaveformCursorHoldScrubTimer();
     waveViewport.classList.remove('cursor-scrub-hover');
@@ -2795,6 +2978,9 @@ window.addEventListener('pointercancel', (event) => {
   if (waveformCursorDrag.active && waveformCursorDrag.pointerId === event.pointerId) {
     waveformCursorDrag.active = false;
     waveformCursorDrag.pointerId = null;
+    waveformCursorDrag.pointerType = null;
+    stopScrubSeek();
+    syncWaveViewportTouchAction();
     clearWaveformCursorIdleTimer();
     clearWaveformCursorHoldScrubTimer();
     waveViewport.classList.remove('cursor-scrub-hover');
