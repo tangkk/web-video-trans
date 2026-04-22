@@ -47,7 +47,10 @@ const transcribePanel = document.getElementById('transcribePanel');
 const transcribeBody = document.getElementById('transcribeBody');
 const transcribeBadge = document.getElementById('transcribeBadge');
 const transcribeBtn = document.getElementById('transcribeBtn');
+const transcribeBtnWrap = document.getElementById('transcribeBtnWrap');
 const transcribeMeta = document.getElementById('transcribeMeta');
+const transcribeWarning = document.getElementById('transcribeWarning');
+const transcribeInputModeSelect = document.getElementById('transcribeInputMode');
 const transcribeViewModeSelect = document.getElementById('transcribeViewMode');
 const transcribeScrollBar = document.getElementById('transcribeScrollBar');
 const transcribeHoverLabel = document.getElementById('transcribeHoverLabel');
@@ -154,6 +157,7 @@ let transcribeView = {
   maxPitch: 84,
   mode: 'focus',
 };
+let transcribeInputMode = 'full';
 let transcribeState = {
   status: 'idle',
   message: 'Set an A-B loop first.',
@@ -348,10 +352,28 @@ function updateTranscribeUi() {
   }
 
   if (transcribeBtn) {
+    const disabledReason = tooLong
+      ? `Selection is ${loopSpan.toFixed(1)}s. Trim it to 30.0s or less.`
+      : !decodedAudioBuffer
+        ? 'Load a file first.'
+        : !hasLoop
+          ? 'Set an A-B loop first.'
+          : '';
     transcribeBtn.disabled = !decodedAudioBuffer || !hasLoop || tooLong || busy || processingState.active;
+    transcribeBtn.title = disabledReason;
+    transcribeBtn.setAttribute('aria-label', disabledReason || 'Transcribe A-B');
+    if (transcribeBtnWrap) {
+      transcribeBtnWrap.dataset.disabledReason = disabledReason;
+    }
   }
 
   if (transcribeMeta) {
+    const activeInputMode = transcribeResult?.inputMode || transcribeInputMode;
+    const modeLabel = activeInputMode === 'bass-tight'
+      ? 'Bass Tight'
+      : activeInputMode === 'bass-broad'
+        ? 'Bass Broad'
+        : 'Full mix';
     if (busy) {
       transcribeMeta.textContent = transcribeState.detail || transcribeState.message || 'Transcribing…';
     } else if (!decodedAudioBuffer) {
@@ -359,15 +381,25 @@ function updateTranscribeUi() {
     } else if (!hasLoop) {
       transcribeMeta.textContent = 'Set an A-B loop first.';
     } else if (tooLong) {
-      transcribeMeta.textContent = `Selection is ${loopSpan.toFixed(1)}s. Trim it to 30.0s or less.`;
+      transcribeMeta.textContent = `A-B ready · ${modeLabel}`;
     } else if (transcribeState.status === 'done' && transcribeResult?.notes?.length) {
-      transcribeMeta.textContent = `${transcribeResult.notes.length} notes · ${loopSpan.toFixed(2)}s window`;
+      transcribeMeta.textContent = `${transcribeResult.notes.length} notes · ${loopSpan.toFixed(2)}s window · ${modeLabel}`;
     } else if (transcribeState.status === 'done') {
-      transcribeMeta.textContent = `No confident notes found in ${loopSpan.toFixed(2)}s.`;
+      transcribeMeta.textContent = `No confident notes found in ${loopSpan.toFixed(2)}s · ${modeLabel}.`;
     } else if (transcribeState.status === 'error') {
       transcribeMeta.textContent = transcribeState.message || 'Transcription failed.';
     } else {
-      transcribeMeta.textContent = `Ready to transcribe ${loopSpan.toFixed(2)}s from A-B.`;
+      transcribeMeta.textContent = `Ready to transcribe ${loopSpan.toFixed(2)}s from A-B · ${modeLabel}.`;
+    }
+  }
+
+  if (transcribeWarning) {
+    if (tooLong) {
+      transcribeWarning.hidden = false;
+      transcribeWarning.textContent = `Selection is ${loopSpan.toFixed(1)}s. Trim it to 30.0s or less.`;
+    } else {
+      transcribeWarning.hidden = true;
+      transcribeWarning.textContent = '';
     }
   }
 
@@ -743,6 +775,15 @@ async function ensureBasicPitchModel() {
   }
   const mod = await basicPitchModulePromise;
   if (!basicPitchModelPromise) {
+    const tf = mod.tf;
+    if (tf?.setBackend) {
+      try {
+        await tf.setBackend('cpu');
+        await tf.ready?.();
+      } catch (error) {
+        console.warn('Failed to force TFJS CPU backend', error);
+      }
+    }
     const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
     const modelUrl = new URL('basic-pitch-model/model.json', baseUrl).href;
     basicPitchModelPromise = Promise.resolve(new mod.BasicPitch(modelUrl));
@@ -781,6 +822,148 @@ function resampleMonoBuffer(sourceBuffer, targetSampleRate = 22050) {
   return output;
 }
 
+function biquadFilterMono(input, sampleRate, type, cutoff, q = 0.707) {
+  const output = new Float32Array(input.length);
+  const omega = 2 * Math.PI * (cutoff / sampleRate);
+  const sin = Math.sin(omega);
+  const cos = Math.cos(omega);
+  const alpha = sin / (2 * q);
+  let b0 = 0;
+  let b1 = 0;
+  let b2 = 0;
+  let a0 = 1;
+  let a1 = 0;
+  let a2 = 0;
+
+  if (type === 'lowpass') {
+    b0 = (1 - cos) / 2;
+    b1 = 1 - cos;
+    b2 = (1 - cos) / 2;
+    a0 = 1 + alpha;
+    a1 = -2 * cos;
+    a2 = 1 - alpha;
+  } else if (type === 'highpass') {
+    b0 = (1 + cos) / 2;
+    b1 = -(1 + cos);
+    b2 = (1 + cos) / 2;
+    a0 = 1 + alpha;
+    a1 = -2 * cos;
+    a2 = 1 - alpha;
+  } else {
+    return input.slice();
+  }
+
+  b0 /= a0;
+  b1 /= a0;
+  b2 /= a0;
+  a1 /= a0;
+  a2 /= a0;
+
+  let x1 = 0;
+  let x2 = 0;
+  let y1 = 0;
+  let y2 = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const x0 = input[i];
+    const y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    output[i] = y0;
+    x2 = x1;
+    x1 = x0;
+    y2 = y1;
+    y1 = y0;
+  }
+
+  return output;
+}
+
+function softClipSample(value) {
+  return Math.tanh(value);
+}
+
+function normalizeMonoBuffer(input, targetPeak = 0.92) {
+  let peak = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    peak = Math.max(peak, Math.abs(input[i]));
+  }
+  if (peak < 1e-5) return input;
+  const gain = targetPeak / peak;
+  const output = new Float32Array(input.length);
+  for (let i = 0; i < input.length; i += 1) {
+    output[i] = softClipSample(input[i] * gain);
+  }
+  return output;
+}
+
+function buildBassFocusMonoBuffer(sourceBuffer, targetSampleRate = 22050, mode = 'bass-broad') {
+  const mono = resampleMonoBuffer(sourceBuffer, targetSampleRate);
+  const output = new Float32Array(mono.length);
+
+  if (mode === 'bass-tight') {
+    const subTight = biquadFilterMono(mono, targetSampleRate, 'highpass', 40, 0.82);
+    const bassCore = biquadFilterMono(subTight, targetSampleRate, 'lowpass', 145, 0.98);
+    const lowMidBand = biquadFilterMono(subTight, targetSampleRate, 'lowpass', 220, 0.92);
+    for (let i = 0; i < bassCore.length; i += 1) {
+      const core = bassCore[i];
+      const lowMid = lowMidBand[i] - bassCore[i];
+      const enhanced = (core * 2.35) + (lowMid * 0.22);
+      output[i] = softClipSample(enhanced * 1.45);
+    }
+    return normalizeMonoBuffer(output, 0.99);
+  }
+
+  const subTight = biquadFilterMono(mono, targetSampleRate, 'highpass', 38, 0.8);
+  const bassCore = biquadFilterMono(subTight, targetSampleRate, 'lowpass', 185, 0.95);
+  const lowMidBand = biquadFilterMono(subTight, targetSampleRate, 'lowpass', 320, 0.9);
+  const harmonicBand = biquadFilterMono(subTight, targetSampleRate, 'lowpass', 520, 0.85);
+
+  for (let i = 0; i < bassCore.length; i += 1) {
+    const core = bassCore[i];
+    const lowMid = lowMidBand[i] - bassCore[i];
+    const harmonic = harmonicBand[i] - lowMidBand[i];
+    const enhanced = (core * 1.9) + (lowMid * 0.45) + (harmonic * 0.08);
+    output[i] = softClipSample(enhanced * 1.35);
+  }
+
+  return normalizeMonoBuffer(output, 0.98);
+}
+
+function consolidateBassTranscribedNotes(notes, mode) {
+  if (!Array.isArray(notes) || !notes.length) return [];
+
+  const minDuration = mode === 'bass-tight' ? 0.07 : 0.05;
+  const mergeGap = mode === 'bass-tight' ? 0.085 : 0.06;
+  const mergePitchDelta = mode === 'bass-tight' ? 0 : 1;
+  const kept = notes.filter((note) => note.durationSeconds >= minDuration);
+  if (!kept.length) return [];
+
+  const merged = [];
+  for (const note of kept) {
+    const prev = merged[merged.length - 1];
+    if (!prev) {
+      merged.push({ ...note });
+      continue;
+    }
+
+    const prevEnd = prev.startTimeSeconds + prev.durationSeconds;
+    const gap = note.startTimeSeconds - prevEnd;
+    const pitchDelta = Math.abs(note.pitchMidi - prev.pitchMidi);
+
+    if (gap <= mergeGap && pitchDelta <= mergePitchDelta) {
+      const nextEnd = Math.max(prevEnd, note.startTimeSeconds + note.durationSeconds);
+      const prevWeight = Math.max(0.001, prev.durationSeconds * Math.max(0.05, prev.amplitude || 0.05));
+      const noteWeight = Math.max(0.001, note.durationSeconds * Math.max(0.05, note.amplitude || 0.05));
+      prev.pitchMidi = Math.round(((prev.pitchMidi * prevWeight) + (note.pitchMidi * noteWeight)) / (prevWeight + noteWeight));
+      prev.amplitude = Math.max(prev.amplitude || 0, note.amplitude || 0);
+      prev.durationSeconds = nextEnd - prev.startTimeSeconds;
+      continue;
+    }
+
+    merged.push({ ...note });
+  }
+
+  return merged.filter((note) => note.durationSeconds >= minDuration);
+}
+
 async function runTranscription() {
   if (!decodedAudioBuffer) {
     setStatus('Load a file first');
@@ -811,7 +994,9 @@ async function runTranscription() {
     if (jobId !== currentTranscribeJobId) return;
 
     setTranscribeState('running', 'Preparing audio segment…', `Using ${span.toFixed(2)}s from the current A-B loop`, 0.08);
-    const mono22050 = resampleMonoBuffer(decodedAudioBuffer, 22050);
+    const mono22050 = (transcribeInputMode === 'bass-broad' || transcribeInputMode === 'bass-tight')
+      ? buildBassFocusMonoBuffer(decodedAudioBuffer, 22050, transcribeInputMode)
+      : resampleMonoBuffer(decodedAudioBuffer, 22050);
     if (jobId !== currentTranscribeJobId) return;
 
     const frameCollector = { frames: [], onsets: [], contours: [] };
@@ -831,7 +1016,7 @@ async function runTranscription() {
     if (jobId !== currentTranscribeJobId) return;
 
     const noteFrames = mod.outputToNotesPoly(frameCollector.frames, frameCollector.onsets, 0.5, 0.3, 5, true, null, null, true, 11);
-    const timedNotes = mod.noteFramesToTime(noteFrames)
+    let timedNotes = mod.noteFramesToTime(noteFrames)
       .map((note) => ({
         pitchMidi: note.pitchMidi,
         amplitude: note.amplitude,
@@ -839,13 +1024,27 @@ async function runTranscription() {
         durationSeconds: note.durationSeconds,
       }))
       .filter((note) => note.durationSeconds > 0.03)
+      .filter((note) => {
+        if (transcribeInputMode === 'bass-tight') {
+          return note.pitchMidi >= 28 && note.pitchMidi <= 52;
+        }
+        if (transcribeInputMode === 'bass-broad') {
+          return note.pitchMidi >= 28 && note.pitchMidi <= 60;
+        }
+        return true;
+      })
       .sort((a, b) => a.startTimeSeconds - b.startTimeSeconds || a.pitchMidi - b.pitchMidi);
+
+    if (transcribeInputMode === 'bass-tight' || transcribeInputMode === 'bass-broad') {
+      timedNotes = consolidateBassTranscribedNotes(timedNotes, transcribeInputMode);
+    }
 
     transcribeResult = {
       notes: timedNotes,
       duration: span,
       startedAt: loopState.start,
       endedAt: loopState.end,
+      inputMode: transcribeInputMode,
     };
     syncTranscribeViewToResult();
     setTranscribeState('done', timedNotes.length ? 'Transcription ready.' : 'No confident notes found.', '', 1);
@@ -2665,6 +2864,26 @@ if (eqPresets) {
 
 if (transcribeBtn) {
   transcribeBtn.addEventListener('click', runTranscription);
+}
+
+if (transcribeBtnWrap) {
+  transcribeBtnWrap.addEventListener('click', () => {
+    if (!transcribeBtn?.disabled) return;
+    const reason = transcribeBtnWrap.dataset.disabledReason || transcribeBtn?.title || '';
+    if (!reason) return;
+    setStatus(reason);
+    if (transcribeMeta) {
+      transcribeMeta.textContent = reason;
+    }
+  });
+}
+
+if (transcribeInputModeSelect) {
+  transcribeInputModeSelect.value = transcribeInputMode;
+  transcribeInputModeSelect.addEventListener('change', () => {
+    transcribeInputMode = transcribeInputModeSelect.value || 'full';
+    updateTranscribeUi();
+  });
 }
 
 if (transcribeViewModeSelect) {

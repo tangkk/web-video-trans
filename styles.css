@@ -520,12 +520,23 @@ video.ready {
   flex-wrap: wrap;
 }
 
+.transcribe-btn-wrap {
+  display: inline-flex;
+}
+
 .transcribe-mode-control {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.transcribe-warning {
+  margin: 8px 0 0;
+  color: #f59e0b;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .transcribe-mode-select {
@@ -661,7 +672,7 @@ video.ready {
 .transport-controls {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .transport-btn {
@@ -669,9 +680,9 @@ video.ready {
   border: 0;
   background: transparent;
   color: var(--text);
-  width: 18px;
-  min-width: 18px;
-  height: 18px;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
   padding: 0;
   line-height: 1;
   text-align: center;
@@ -679,8 +690,8 @@ video.ready {
 }
 
 .svg-transport-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   display: block;
 }
 
