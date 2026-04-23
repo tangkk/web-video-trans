@@ -3,10 +3,73 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Video/Audio Inspector</title>
+    <title>web-video-trans — Free Online Video & Audio Transcription Tool</title>
+    <meta
+      name="description"
+      content="Free local-first browser tool to inspect video or audio, slow playback, loop A/B sections, apply EQ, view waveforms, and transcribe notes without uploading files."
+    />
+    <meta
+      name="keywords"
+      content="video transcription tool,audio transcription tool,music transcription,ab loop,slow down audio,waveform viewer,eq presets,piano roll,local browser tool,no upload"
+    />
+    <meta name="author" content="tangkk" />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
+    <meta name="theme-color" content="#0f1115" />
+    <link rel="canonical" href="https://tangkk.github.io/web-video-trans/" />
+    <link rel="manifest" href="./site.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="web-video-trans" />
+    <meta property="og:title" content="web-video-trans — Free Online Video & Audio Transcription Tool" />
+    <meta
+      property="og:description"
+      content="Inspect local video or audio, loop hard passages, slow playback, apply EQ, view waveforms, and transcribe notes directly in your browser."
+    />
+    <meta property="og:url" content="https://tangkk.github.io/web-video-trans/" />
+    <meta property="og:image" content="https://tangkk.github.io/web-video-trans/og-image.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="web-video-trans — Free Online Video & Audio Transcription Tool" />
+    <meta
+      name="twitter:description"
+      content="A local-first browser tool for music transcription: A/B loop, speed control, EQ, waveform inspection, and piano-roll note view."
+    />
+    <meta name="twitter:image" content="https://tangkk.github.io/web-video-trans/og-image.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "web-video-trans",
+        "url": "https://tangkk.github.io/web-video-trans/",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires JavaScript. Works in modern browsers.",
+        "description": "A local-first browser tool for inspecting video and audio, setting A/B loops, slowing playback, applying EQ, viewing waveforms, and transcribing music phrases into a piano-roll note view.",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "creator": {
+          "@type": "Person",
+          "name": "tangkk"
+        },
+        "featureList": [
+          "Open local video and audio files in the browser",
+          "A/B loop playback",
+          "Speed control for close listening",
+          "Waveform zoom and seeking",
+          "EQ presets for instruments",
+          "Piano-roll note transcription view",
+          "No upload, local-first processing"
+        ]
+      }
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <a class="sr-only" href="#main-content">Skip to main content</a>
     <div class="page-shell">
       <header class="home-hero">
         <div class="home-hero-copy">
@@ -16,7 +79,7 @@
         </div>
       </header>
 
-      <section class="card viewer-card">
+      <main id="main-content" class="card viewer-card">
         <input id="videoFile" class="sr-only-file-input" type="file" accept="video/*,audio/*,.mp4,.mov,.m4v,.webm,.mkv,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" tabindex="-1" aria-hidden="true" />
         <div id="dropZone" class="media-stage">
           <button id="mobileClearBtn" class="mobile-clear-btn" type="button" aria-label="Clear" title="Clear">×</button>
@@ -186,6 +249,26 @@
           </div>
           <pre id="debugPanel" class="debug-panel">debug panel ready</pre>
         </div>
+      </main>
+
+      <section class="sr-only" aria-label="About web-video-trans">
+        <h2>About this tool</h2>
+        <p>
+          web-video-trans is a free browser-based video and audio transcription tool for musicians, learners,
+          and close listeners. It helps you open local media files, loop difficult phrases, slow playback,
+          inspect waveforms, apply EQ presets, and view a piano-roll style transcription without uploading
+          your files to a server.
+        </p>
+        <h2>Key features</h2>
+        <ul>
+          <li>Open local video and audio files directly in the browser</li>
+          <li>Set A/B loops for repeated listening</li>
+          <li>Slow down playback for hard passages</li>
+          <li>Zoom into the waveform for precise seeking</li>
+          <li>Use EQ presets to focus on instruments like bass, guitar, piano, vocal, and drums</li>
+          <li>Transcribe short passages into a piano-roll note view</li>
+          <li>Keep files local for privacy and speed</li>
+        </ul>
       </section>
     </div>
 

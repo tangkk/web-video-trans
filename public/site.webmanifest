@@ -1,0 +1,10 @@
+{
+  "name": "web-video-trans",
+  "short_name": "web-video-trans",
+  "description": "Local-first browser tool for video/audio inspection and music transcription.",
+  "start_url": "/web-video-trans/",
+  "display": "standalone",
+  "background_color": "#f6f6f3",
+  "theme_color": "#0f1115",
+  "icons": []
+}
