@@ -546,6 +546,12 @@ video.ready {
   display: inline-flex;
 }
 
+.transcribe-play-btn.is-active {
+  background: #111111;
+  color: #ffffff;
+  border-color: #111111;
+}
+
 .transcribe-mode-control {
   display: inline-flex;
   align-items: center;

@@ -47,6 +47,7 @@ const transcribePanel = document.getElementById('transcribePanel');
 const transcribeBody = document.getElementById('transcribeBody');
 const transcribeBadge = document.getElementById('transcribeBadge');
 const transcribeBtn = document.getElementById('transcribeBtn');
+const transcribePlayBtn = document.getElementById('transcribePlayBtn');
 const transcribeBtnWrap = document.getElementById('transcribeBtnWrap');
 const transcribeMeta = document.getElementById('transcribeMeta');
 const transcribeWarning = document.getElementById('transcribeWarning');
@@ -152,6 +153,15 @@ let transcribeResult = null;
 let transcribeHoverNoteIndex = -1;
 let transcribePitchPreviewNodes = [];
 let activeTranscribePointerId = null;
+let transcribeNotePlayback = {
+  active: false,
+  loop: true,
+  startedAtContextTime: 0,
+  duration: 0,
+  sources: [],
+  gains: [],
+  loopTimerId: null,
+};
 let transcribeView = {
   minPitch: 48,
   maxPitch: 84,
@@ -326,6 +336,7 @@ function getLoopSpanSeconds() {
 }
 
 function resetTranscribeResult() {
+  stopTranscribeNotesPlayback({ keepStatus: true });
   transcribeResult = null;
 }
 
@@ -335,6 +346,7 @@ function updateTranscribeUi() {
   const tooLong = hasLoop && loopSpan > 30;
   const busy = transcribeState.status === 'running';
   const hasResult = Boolean(transcribeResult);
+  const hasPlayableNotes = Boolean(transcribeResult?.notes?.length);
 
   if (transcribeBody) {
     transcribeBody.classList.toggle('has-result', hasResult);
@@ -365,6 +377,21 @@ function updateTranscribeUi() {
     if (transcribeBtnWrap) {
       transcribeBtnWrap.dataset.disabledReason = disabledReason;
     }
+  }
+
+  if (transcribePlayBtn) {
+    const playDisabledReason = busy
+      ? 'Wait for transcription to finish.'
+      : !hasResult
+        ? 'Transcribe the A-B loop first.'
+        : !hasPlayableNotes
+          ? 'No transcribed notes to play.'
+          : '';
+    transcribePlayBtn.disabled = busy || !hasResult || !hasPlayableNotes;
+    transcribePlayBtn.textContent = transcribeNotePlayback.active ? 'Stop notes' : 'Play notes only';
+    transcribePlayBtn.title = playDisabledReason || 'Play only the transcribed notes';
+    transcribePlayBtn.setAttribute('aria-label', playDisabledReason || 'Play only the transcribed notes');
+    transcribePlayBtn.classList.toggle('is-active', transcribeNotePlayback.active);
   }
 
   if (transcribeMeta) {
@@ -515,9 +542,16 @@ function syncTranscribeViewToResult() {
 
 function getTranscribeCursorSeconds() {
   if (!transcribeResult) return null;
-  const absoluteCurrent = shortLoopPlayback.active
-    ? (shortLoopPlayback.start + (((audioContext?.currentTime || 0) - shortLoopPlayback.startedAtContextTime) % Math.max(0.001, shortLoopPlayback.end - shortLoopPlayback.start)))
-    : (video.currentTime || 0);
+  let absoluteCurrent;
+  if (transcribeNotePlayback.active) {
+    const loopDuration = Math.max(0.001, transcribeNotePlayback.duration || transcribeResult.duration || 0.001);
+    const elapsed = (audioContext?.currentTime || 0) - transcribeNotePlayback.startedAtContextTime;
+    absoluteCurrent = transcribeResult.startedAt + ((((elapsed % loopDuration) + loopDuration) % loopDuration));
+  } else {
+    absoluteCurrent = shortLoopPlayback.active
+      ? (shortLoopPlayback.start + (((audioContext?.currentTime || 0) - shortLoopPlayback.startedAtContextTime) % Math.max(0.001, shortLoopPlayback.end - shortLoopPlayback.start)))
+      : (video.currentTime || 0);
+  }
   const relative = absoluteCurrent - transcribeResult.startedAt;
   if (!Number.isFinite(relative)) return null;
   return Math.max(0, Math.min(transcribeResult.duration, relative));
@@ -594,6 +628,117 @@ function getTranscribeNoteAtEvent(event) {
 
 function midiToFrequency(midi) {
   return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function clearTranscribeNoteLoopTimer() {
+  if (transcribeNotePlayback.loopTimerId != null) {
+    window.clearTimeout(transcribeNotePlayback.loopTimerId);
+    transcribeNotePlayback.loopTimerId = null;
+  }
+}
+
+function stopTranscribeNotesPlayback({ keepStatus = false } = {}) {
+  clearTranscribeNoteLoopTimer();
+  transcribeNotePlayback.sources.forEach((source) => {
+    try { source.onended = null; } catch (error) {}
+    try { source.stop(); } catch (error) {}
+    try { source.disconnect(); } catch (error) {}
+  });
+  transcribeNotePlayback.gains.forEach((gain) => {
+    try { gain.disconnect(); } catch (error) {}
+  });
+  transcribeNotePlayback = {
+    ...transcribeNotePlayback,
+    active: false,
+    startedAtContextTime: 0,
+    duration: 0,
+    sources: [],
+    gains: [],
+  };
+  if (!keepStatus && transcribeResult?.notes?.length) {
+    setStatus('Stopped transcribed note playback');
+  }
+  if (!shortLoopPlayback.active && (video.paused || video.ended)) {
+    stopPlaybackAnimation();
+    updateTimeline(true);
+  }
+  updateTranscribeUi();
+}
+
+async function startTranscribeNotesPlayback() {
+  if (!transcribeResult?.notes?.length) return false;
+  const context = await ensureAudioContext();
+  if (context.state === 'suspended') {
+    await context.resume();
+  }
+
+  stopTranscribePitchPreview();
+  stopTranscribeNotesPlayback({ keepStatus: true });
+  stopShortAudioLoop();
+  video.pause();
+  forceSeekToLoopStart('transcribe-note-playback');
+
+  const startedAt = context.currentTime + 0.02;
+  const duration = Math.max(0.05, transcribeResult.duration || getLoopSpanSeconds() || 0.05);
+  const nextSources = [];
+  const nextGains = [];
+
+  transcribeResult.notes.forEach((note) => {
+    const noteStart = Math.max(0, Math.min(duration, note.startTimeSeconds || 0));
+    const noteDuration = Math.max(0.04, Math.min(duration - noteStart, note.durationSeconds || 0.08));
+    if (noteDuration <= 0) return;
+
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const peakGain = Math.max(0.03, Math.min(0.14, 0.04 + (note.amplitude ?? 0.6) * 0.09));
+    const attack = Math.min(0.012, noteDuration * 0.25);
+    const release = Math.min(0.03, Math.max(0.008, noteDuration * 0.35));
+    const startAt = startedAt + noteStart;
+    const stopAt = startAt + noteDuration;
+    const releaseAt = Math.max(startAt + attack, stopAt - release);
+
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(midiToFrequency(note.pitchMidi), startAt);
+    gain.gain.setValueAtTime(0.0001, startAt);
+    gain.gain.exponentialRampToValueAtTime(peakGain, startAt + attack);
+    gain.gain.setValueAtTime(peakGain, releaseAt);
+    gain.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(startAt);
+    oscillator.stop(stopAt + 0.01);
+
+    nextSources.push(oscillator);
+    nextGains.push(gain);
+  });
+
+  transcribeNotePlayback = {
+    ...transcribeNotePlayback,
+    active: true,
+    startedAtContextTime: startedAt,
+    duration,
+    sources: nextSources,
+    gains: nextGains,
+  };
+
+  clearTranscribeNoteLoopTimer();
+  if (transcribeNotePlayback.loop) {
+    transcribeNotePlayback.loopTimerId = window.setTimeout(() => {
+      if (!transcribeNotePlayback.active) return;
+      startTranscribeNotesPlayback().catch((error) => {
+        console.error(error);
+        stopTranscribeNotesPlayback({ keepStatus: true });
+        setStatus(`Transcribed note playback failed: ${error?.message || 'unknown error'}`);
+      });
+    }, Math.max(20, duration * 1000));
+  }
+
+  setStatus(`Playing transcribed notes only · ${transcribeResult.notes.length} notes`);
+  updateTranscribeUi();
+  startPlaybackAnimation();
+  updateTimeline(true);
+  return true;
 }
 
 function stopTranscribePitchPreview() {
@@ -1989,6 +2134,7 @@ async function startShortAudioLoop() {
 
 function stopToStart() {
   if (!currentFile || !video.src) return;
+  stopTranscribeNotesPlayback({ keepStatus: true });
   stopShortAudioLoop();
   video.pause();
   video.currentTime = 0;
@@ -1999,6 +2145,7 @@ function stopToStart() {
 }
 
 function clearCurrentFile() {
+  stopTranscribeNotesPlayback({ keepStatus: true });
   stopShortAudioLoop();
   stopPlaybackAnimation();
   decodedAudioBuffer = null;
@@ -2071,6 +2218,13 @@ function stopPlaybackAnimation() {
 }
 
 function playbackAnimationLoop() {
+  if (transcribeNotePlayback.active) {
+    updateTimeline();
+    drawTranscriptionRoll();
+    rafId = requestAnimationFrame(playbackAnimationLoop);
+    return;
+  }
+
   if (shortLoopPlayback.active) {
     updateTimeline();
     drawTranscriptionRoll();
@@ -2777,6 +2931,15 @@ async function togglePlayPause() {
   }
   pushPipelineDebug('playback:toggle', `paused=${video.paused} ended=${video.ended} current=${video.currentTime.toFixed(3)} loop=${isLoopActive()} short=${shouldUseShortAudioLoop()}`);
 
+  if (transcribeNotePlayback.active) {
+    stopTranscribeNotesPlayback({ keepStatus: true });
+    stopPlaybackAnimation();
+    updatePlayPauseButton();
+    setStatus('Paused');
+    updateTimeline(true);
+    return;
+  }
+
   if (shortLoopPlayback.active) {
     stopShortAudioLoop();
     stopPlaybackAnimation();
@@ -2864,6 +3027,18 @@ if (eqPresets) {
 
 if (transcribeBtn) {
   transcribeBtn.addEventListener('click', runTranscription);
+}
+
+if (transcribePlayBtn) {
+  transcribePlayBtn.addEventListener('click', async () => {
+    if (transcribeNotePlayback.active) {
+      stopTranscribeNotesPlayback();
+      stopPlaybackAnimation();
+      updateTimeline(true);
+      return;
+    }
+    await startTranscribeNotesPlayback();
+  });
 }
 
 if (transcribeBtnWrap) {
